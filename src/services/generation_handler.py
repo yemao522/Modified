@@ -756,8 +756,13 @@ class GenerationHandler:
                                                 )
                                                 
                                                 if upload_result["success"]:
-                                                    local_url = upload_result["webdav_url"]
-                                                    debug_logger.log_info(f"Video uploaded to WebDAV: {local_url}")
+                                                    # Use proxy URL instead of direct WebDAV URL
+                                                    # Extract filename from webdav_path (e.g., /video/task_xxx.mp4 -> task_xxx.mp4)
+                                                    webdav_path = upload_result.get("webdav_path", "")
+                                                    filename = webdav_path.split("/")[-1] if webdav_path else f"{task_id}.mp4"
+                                                    # Build proxy URL: {base_url}/video/{filename}
+                                                    local_url = f"{self._get_base_url()}/video/{filename}"
+                                                    debug_logger.log_info(f"Video uploaded to WebDAV, proxy URL: {local_url}")
                                                     if stream:
                                                         yield self._format_stream_chunk(
                                                             reasoning_content=f"Video uploaded to WebDAV successfully.",
