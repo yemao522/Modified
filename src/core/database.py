@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Optional, List
 from pathlib import Path
-from .models import Token, TokenStats, Task, RequestLog, AdminConfig, ProxyConfig, WatermarkFreeConfig, CacheConfig, GenerationConfig, TokenRefreshConfig, Character
+from .models import Token, TokenStats, Task, RequestLog, AdminConfig, ProxyConfig, WatermarkFreeConfig, CacheConfig, GenerationConfig, TokenRefreshConfig, Character, WebDAVConfig, VideoRecord, UploadLog
 
 class Database:
     """SQLite database manager"""
@@ -254,6 +254,63 @@ class Database:
             # Pass config_dict if available to initialize from setting.toml
             await self._ensure_config_rows(db, config_dict)
 
+            # Create new tables if they don't exist (for migration)
+            if not await self._table_exists(db, "webdav_config"):
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS webdav_config (
+                        id INTEGER PRIMARY KEY DEFAULT 1,
+                        webdav_enabled BOOLEAN DEFAULT 0,
+                        webdav_url TEXT,
+                        webdav_username TEXT,
+                        webdav_password TEXT,
+                        webdav_upload_path TEXT DEFAULT '/video',
+                        auto_delete_enabled BOOLEAN DEFAULT 0,
+                        auto_delete_days INTEGER DEFAULT 30,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                print("  ✓ Created webdav_config table")
+
+            if not await self._table_exists(db, "video_records"):
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS video_records (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        task_id TEXT NOT NULL,
+                        token_id INTEGER NOT NULL,
+                        original_url TEXT NOT NULL,
+                        watermark_free_url TEXT,
+                        webdav_path TEXT,
+                        webdav_url TEXT,
+                        file_size INTEGER,
+                        status TEXT DEFAULT 'pending',
+                        error_message TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        uploaded_at TIMESTAMP,
+                        deleted_at TIMESTAMP,
+                        FOREIGN KEY (token_id) REFERENCES tokens(id)
+                    )
+                """)
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_video_record_task_id ON video_records(task_id)")
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_video_record_status ON video_records(status)")
+                print("  ✓ Created video_records table")
+
+            if not await self._table_exists(db, "upload_logs"):
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS upload_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        video_record_id INTEGER,
+                        operation TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        message TEXT,
+                        duration FLOAT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (video_record_id) REFERENCES video_records(id)
+                    )
+                """)
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_upload_log_video_record_id ON upload_logs(video_record_id)")
+                print("  ✓ Created upload_logs table")
+
             await db.commit()
             print("Database migration check completed.")
 
@@ -433,12 +490,65 @@ class Database:
                 )
             """)
 
+            # WebDAV config table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS webdav_config (
+                    id INTEGER PRIMARY KEY DEFAULT 1,
+                    webdav_enabled BOOLEAN DEFAULT 0,
+                    webdav_url TEXT,
+                    webdav_username TEXT,
+                    webdav_password TEXT,
+                    webdav_upload_path TEXT DEFAULT '/video',
+                    auto_delete_enabled BOOLEAN DEFAULT 0,
+                    auto_delete_days INTEGER DEFAULT 30,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Video records table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS video_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    token_id INTEGER NOT NULL,
+                    original_url TEXT NOT NULL,
+                    watermark_free_url TEXT,
+                    webdav_path TEXT,
+                    webdav_url TEXT,
+                    file_size INTEGER,
+                    status TEXT DEFAULT 'pending',
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    uploaded_at TIMESTAMP,
+                    deleted_at TIMESTAMP,
+                    FOREIGN KEY (token_id) REFERENCES tokens(id)
+                )
+            """)
+
+            # Upload logs table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS upload_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_record_id INTEGER,
+                    operation TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    message TEXT,
+                    duration FLOAT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (video_record_id) REFERENCES video_records(id)
+                )
+            """)
+
             # Create indexes
             await db.execute("CREATE INDEX IF NOT EXISTS idx_task_id ON tasks(task_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_task_status ON tasks(status)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_token_active ON tokens(is_active)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_character_cameo_id ON characters(cameo_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_character_token_id ON characters(token_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_video_record_task_id ON video_records(task_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_video_record_status ON video_records(status)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_upload_log_video_record_id ON upload_logs(video_record_id)")
 
             # Migration: Add daily statistics columns if they don't exist
             if not await self._column_exists(db, "token_stats", "today_image_count"):
@@ -1255,3 +1365,233 @@ class Database:
             await db.commit()
             return cursor.rowcount > 0
 
+
+    # WebDAV config operations
+    async def get_webdav_config(self) -> WebDAVConfig:
+        """Get WebDAV configuration"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM webdav_config WHERE id = 1")
+            row = await cursor.fetchone()
+            if row:
+                return WebDAVConfig(**dict(row))
+            # If no row exists, return a default config
+            return WebDAVConfig(webdav_enabled=False)
+
+    async def update_webdav_config(self, enabled: bool = None, url: str = None, 
+                                   username: str = None, password: str = None,
+                                   upload_path: str = None, auto_delete_enabled: bool = None,
+                                   auto_delete_days: int = None):
+        """Update WebDAV configuration"""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Check if row exists
+            cursor = await db.execute("SELECT COUNT(*) FROM webdav_config WHERE id = 1")
+            count = await cursor.fetchone()
+            
+            if count[0] == 0:
+                # Insert new row
+                await db.execute("""
+                    INSERT INTO webdav_config (id, webdav_enabled, webdav_url, webdav_username, 
+                                              webdav_password, webdav_upload_path, auto_delete_enabled, auto_delete_days)
+                    VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+                """, (enabled or False, url, username, password, upload_path or '/video', 
+                      auto_delete_enabled or False, auto_delete_days or 30))
+            else:
+                # Build dynamic update query
+                updates = []
+                params = []
+                
+                if enabled is not None:
+                    updates.append("webdav_enabled = ?")
+                    params.append(enabled)
+                if url is not None:
+                    updates.append("webdav_url = ?")
+                    params.append(url)
+                if username is not None:
+                    updates.append("webdav_username = ?")
+                    params.append(username)
+                if password is not None:
+                    updates.append("webdav_password = ?")
+                    params.append(password)
+                if upload_path is not None:
+                    updates.append("webdav_upload_path = ?")
+                    params.append(upload_path)
+                if auto_delete_enabled is not None:
+                    updates.append("auto_delete_enabled = ?")
+                    params.append(auto_delete_enabled)
+                if auto_delete_days is not None:
+                    updates.append("auto_delete_days = ?")
+                    params.append(auto_delete_days)
+                
+                if updates:
+                    updates.append("updated_at = CURRENT_TIMESTAMP")
+                    query = f"UPDATE webdav_config SET {', '.join(updates)} WHERE id = 1"
+                    await db.execute(query, params)
+            
+            await db.commit()
+
+    # Video record operations
+    async def create_video_record(self, record: VideoRecord) -> int:
+        """Create a new video record"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                INSERT INTO video_records (task_id, token_id, original_url, watermark_free_url, 
+                                          webdav_path, webdav_url, file_size, status, error_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (record.task_id, record.token_id, record.original_url, record.watermark_free_url,
+                  record.webdav_path, record.webdav_url, record.file_size, record.status, record.error_message))
+            await db.commit()
+            return cursor.lastrowid
+
+    async def get_video_record(self, record_id: int) -> Optional[VideoRecord]:
+        """Get video record by ID"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM video_records WHERE id = ?", (record_id,))
+            row = await cursor.fetchone()
+            if row:
+                return VideoRecord(**dict(row))
+            return None
+
+    async def get_video_record_by_task_id(self, task_id: str) -> Optional[VideoRecord]:
+        """Get video record by task ID"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM video_records WHERE task_id = ?", (task_id,))
+            row = await cursor.fetchone()
+            if row:
+                return VideoRecord(**dict(row))
+            return None
+
+    async def get_all_video_records(self, limit: int = 100, status: str = None) -> List[VideoRecord]:
+        """Get all video records with optional status filter"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if status:
+                cursor = await db.execute(
+                    "SELECT * FROM video_records WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                    (status, limit)
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT * FROM video_records ORDER BY created_at DESC LIMIT ?",
+                    (limit,)
+                )
+            rows = await cursor.fetchall()
+            return [VideoRecord(**dict(row)) for row in rows]
+
+    async def get_video_records_for_auto_delete(self, days: int) -> List[VideoRecord]:
+        """Get video records older than specified days for auto deletion"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT * FROM video_records 
+                WHERE status = 'uploaded' 
+                AND uploaded_at < datetime('now', ? || ' days')
+            """, (f"-{days}",))
+            rows = await cursor.fetchall()
+            return [VideoRecord(**dict(row)) for row in rows]
+
+    async def update_video_record(self, record_id: int, **kwargs):
+        """Update video record fields"""
+        if not kwargs:
+            return
+        
+        async with aiosqlite.connect(self.db_path) as db:
+            updates = []
+            params = []
+            
+            for key, value in kwargs.items():
+                if key in ['watermark_free_url', 'webdav_path', 'webdav_url', 'file_size', 
+                          'status', 'error_message', 'uploaded_at', 'deleted_at']:
+                    updates.append(f"{key} = ?")
+                    params.append(value)
+            
+            if updates:
+                params.append(record_id)
+                query = f"UPDATE video_records SET {', '.join(updates)} WHERE id = ?"
+                await db.execute(query, params)
+                await db.commit()
+
+    async def delete_video_record(self, record_id: int):
+        """Delete video record"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM upload_logs WHERE video_record_id = ?", (record_id,))
+            await db.execute("DELETE FROM video_records WHERE id = ?", (record_id,))
+            await db.commit()
+
+    async def delete_all_video_records(self):
+        """Delete all video records and upload logs"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM upload_logs")
+            await db.execute("DELETE FROM video_records")
+            await db.commit()
+
+    async def get_video_records_stats(self) -> dict:
+        """Get video records statistics"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status = 'uploaded' THEN 1 ELSE 0 END) as uploaded,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+                    SUM(CASE WHEN status = 'deleted' THEN 1 ELSE 0 END) as deleted,
+                    SUM(COALESCE(file_size, 0)) as total_size
+                FROM video_records
+            """)
+            row = await cursor.fetchone()
+            return {
+                "total": row[0] or 0,
+                "uploaded": row[1] or 0,
+                "pending": row[2] or 0,
+                "failed": row[3] or 0,
+                "deleted": row[4] or 0,
+                "total_size": row[5] or 0
+            }
+
+    # Upload log operations
+    async def create_upload_log(self, log: UploadLog) -> int:
+        """Create a new upload log"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                INSERT INTO upload_logs (video_record_id, operation, status, message, duration)
+                VALUES (?, ?, ?, ?, ?)
+            """, (log.video_record_id, log.operation, log.status, log.message, log.duration))
+            await db.commit()
+            return cursor.lastrowid
+
+    async def get_upload_logs(self, limit: int = 100) -> List[dict]:
+        """Get recent upload logs with video record info"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT 
+                    ul.*,
+                    vr.task_id,
+                    vr.webdav_path
+                FROM upload_logs ul
+                LEFT JOIN video_records vr ON ul.video_record_id = vr.id
+                ORDER BY ul.created_at DESC
+                LIMIT ?
+            """, (limit,))
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def delete_all_upload_logs(self):
+        """Delete all upload logs"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM upload_logs")
+            await db.commit()
+
+    async def ensure_webdav_config_row(self):
+        """Ensure webdav_config table has a default row"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT COUNT(*) FROM webdav_config")
+            count = await cursor.fetchone()
+            if count[0] == 0:
+                await db.execute("""
+                    INSERT INTO webdav_config (id, webdav_enabled, webdav_upload_path, auto_delete_enabled, auto_delete_days)
+                    VALUES (1, 0, '/video', 0, 30)
+                """)
+                await db.commit()

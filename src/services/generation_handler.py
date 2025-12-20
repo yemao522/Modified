@@ -12,6 +12,7 @@ from .token_manager import TokenManager
 from .load_balancer import LoadBalancer
 from .file_cache import FileCache
 from .concurrency_manager import ConcurrencyManager
+from .webdav_manager import WebDAVManager
 from ..core.database import Database
 from ..core.models import Task, RequestLog, CharacterOptions, Character
 from ..core.config import config
@@ -73,12 +74,14 @@ class GenerationHandler:
 
     def __init__(self, sora_client: SoraClient, token_manager: TokenManager,
                  load_balancer: LoadBalancer, db: Database, proxy_manager=None,
-                 concurrency_manager: Optional[ConcurrencyManager] = None):
+                 concurrency_manager: Optional[ConcurrencyManager] = None,
+                 webdav_manager: Optional[WebDAVManager] = None):
         self.sora_client = sora_client
         self.token_manager = token_manager
         self.load_balancer = load_balancer
         self.db = db
         self.concurrency_manager = concurrency_manager
+        self.webdav_manager = webdav_manager
         self.file_cache = FileCache(
             cache_dir="tmp",
             default_timeout=config.cache_timeout,
@@ -733,8 +736,77 @@ class GenerationHandler:
                                                 details={"permalink": permalink, "cache_enabled": config.cache_enabled}
                                             )
 
-                                        # Cache watermark-free video (if cache enabled)
-                                        if config.cache_enabled:
+                                        # Check if WebDAV is enabled
+                                        webdav_config = await self.db.get_webdav_config()
+                                        if webdav_config.webdav_enabled and self.webdav_manager:
+                                            # WebDAV mode: upload to WebDAV and return WebDAV URL
+                                            try:
+                                                if stream:
+                                                    yield self._format_stream_chunk(
+                                                        reasoning_content="WebDAV enabled. Uploading watermark-free video to WebDAV server...",
+                                                        stage="webdav",
+                                                        status="started"
+                                                    )
+                                                
+                                                upload_result = await self.webdav_manager.upload_video(
+                                                    video_url=url,
+                                                    task_id=task_id,
+                                                    token_id=token_id,
+                                                    watermark_free_url=watermark_free_url
+                                                )
+                                                
+                                                if upload_result["success"]:
+                                                    local_url = upload_result["webdav_url"]
+                                                    debug_logger.log_info(f"Video uploaded to WebDAV: {local_url}")
+                                                    if stream:
+                                                        yield self._format_stream_chunk(
+                                                            reasoning_content=f"Video uploaded to WebDAV successfully.",
+                                                            stage="webdav",
+                                                            status="completed"
+                                                        )
+                                                else:
+                                                    raise Exception(upload_result.get("message", "WebDAV upload failed"))
+                                                
+                                                # Delete the published post after WebDAV upload
+                                                try:
+                                                    debug_logger.log_info(f"Deleting published post: {post_id}")
+                                                    await self.sora_client.delete_post(post_id, token)
+                                                    debug_logger.log_info(f"Published post deleted successfully: {post_id}")
+                                                    if stream:
+                                                        yield self._format_stream_chunk(
+                                                            reasoning_content="Published post deleted successfully.\n"
+                                                        )
+                                                except Exception as delete_error:
+                                                    debug_logger.log_error(
+                                                        error_message=f"Failed to delete published post {post_id}: {str(delete_error)}",
+                                                        status_code=500,
+                                                        response_text=str(delete_error)
+                                                    )
+                                                    if stream:
+                                                        yield self._format_stream_chunk(
+                                                            reasoning_content=f"Warning: Failed to delete published post - {str(delete_error)}\n"
+                                                        )
+                                            except Exception as webdav_error:
+                                                debug_logger.log_error(
+                                                    error_message=f"WebDAV upload failed: {str(webdav_error)}",
+                                                    status_code=500,
+                                                    response_text=str(webdav_error)
+                                                )
+                                                if stream:
+                                                    yield self._format_stream_chunk(
+                                                        reasoning_content=f"Warning: WebDAV upload failed - {str(webdav_error)}. Falling back to cache...\n"
+                                                    )
+                                                # Fallback to cache mode
+                                                if config.cache_enabled:
+                                                    try:
+                                                        cached_filename = await self.file_cache.download_and_cache(watermark_free_url, "video")
+                                                        local_url = f"{self._get_base_url()}/tmp/{cached_filename}"
+                                                    except Exception as cache_error:
+                                                        local_url = watermark_free_url
+                                                else:
+                                                    local_url = watermark_free_url
+                                        # Cache watermark-free video (if cache enabled and WebDAV not enabled)
+                                        elif config.cache_enabled:
                                             try:
                                                 cached_filename = await self.file_cache.download_and_cache(watermark_free_url, "video")
                                                 local_url = f"{self._get_base_url()}/tmp/{cached_filename}"

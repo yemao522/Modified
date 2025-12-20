@@ -143,6 +143,45 @@ class TokenRefreshConfig(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+class WebDAVConfig(BaseModel):
+    """WebDAV configuration"""
+    id: int = 1
+    webdav_enabled: bool = False
+    webdav_url: Optional[str] = None
+    webdav_username: Optional[str] = None
+    webdav_password: Optional[str] = None
+    webdav_upload_path: str = "/video"  # Default upload path
+    auto_delete_enabled: bool = False  # Auto delete after specified days
+    auto_delete_days: int = 30  # Days to keep files
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class VideoRecord(BaseModel):
+    """Video record for WebDAV uploaded videos"""
+    id: Optional[int] = None
+    task_id: str  # Associated task ID
+    token_id: int  # Associated token ID
+    original_url: str  # Original video URL (with watermark)
+    watermark_free_url: Optional[str] = None  # Watermark-free video URL
+    webdav_path: Optional[str] = None  # Path on WebDAV server
+    webdav_url: Optional[str] = None  # Full WebDAV access URL
+    file_size: Optional[int] = None  # File size in bytes
+    status: str = "pending"  # pending/uploading/uploaded/failed/deleted
+    error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
+    uploaded_at: Optional[datetime] = None
+    deleted_at: Optional[datetime] = None
+
+class UploadLog(BaseModel):
+    """Upload log for WebDAV operations"""
+    id: Optional[int] = None
+    video_record_id: Optional[int] = None
+    operation: str  # upload/delete/list
+    status: str  # success/failed
+    message: Optional[str] = None
+    duration: Optional[float] = None  # Operation duration in seconds
+    created_at: Optional[datetime] = None
+
 # API Request/Response models
 class ChatMessage(BaseModel):
     role: str

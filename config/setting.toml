@@ -44,3 +44,12 @@ custom_parse_token = ""
 
 [token_refresh]
 at_auto_refresh_enabled = false
+
+[webdav]
+webdav_enabled = false
+webdav_url = ""
+webdav_username = ""
+webdav_password = ""
+webdav_upload_path = "/video"
+auto_delete_enabled = false
+auto_delete_days = 30
