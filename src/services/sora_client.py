@@ -389,9 +389,32 @@ class SoraClient:
         Returns:
             List of pending tasks with progress information
         """
-        result = await self._make_request("GET", "/nf/pending", token)
+        result = await self._make_request("GET", "/nf/pending/v2", token)
         # The API returns a list directly
         return result if isinstance(result, list) else []
+
+    async def get_task_progress(self, task_id: str, token: str) -> Optional[Dict[str, Any]]:
+        """Get video generation task progress by task ID
+
+        Args:
+            task_id: Task ID (e.g., task_01kcybbj56fp7vctvpmx0drrw1)
+            token: Access token
+
+        Returns:
+            Task progress info with fields:
+            - id: task ID
+            - status: task status (running/completed/failed)
+            - prompt: generation prompt
+            - title: task title
+            - progress_pct: progress percentage (0.0-1.0)
+            - generations: list of generated videos
+            Returns None if task not found
+        """
+        pending_tasks = await self.get_pending_tasks(token)
+        for task in pending_tasks:
+            if task.get("id") == task_id:
+                return task
+        return None
 
     async def post_video_for_watermark_free(self, generation_id: str, prompt: str, token: str) -> str:
         """Post video to get watermark-free version

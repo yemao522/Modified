@@ -396,6 +396,79 @@ async def get_token_profile_feed(
         raise HTTPException(status_code=500, detail=f"Failed to get profile feed: {str(e)}")
 
 
+@router.get("/v1/tokens/{token_id}/pending-tasks")
+async def get_token_pending_tasks(
+    token_id: int,
+    api_key: str = Depends(verify_api_key_header)
+):
+    """Get pending video generation tasks for a specific token
+    
+    Args:
+        token_id: Token ID to query
+    
+    Returns:
+        List of pending tasks with progress information
+    """
+    try:
+        token_obj = await token_manager.get_token_by_id(token_id)
+        if not token_obj:
+            raise HTTPException(status_code=404, detail="Token not found")
+        
+        tasks = await generation_handler.sora_client.get_pending_tasks(token_obj.token)
+        
+        return {
+            "success": True,
+            "token_id": token_id,
+            "count": len(tasks),
+            "tasks": tasks
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get pending tasks: {str(e)}")
+
+
+@router.get("/v1/tokens/{token_id}/tasks/{task_id}")
+async def get_task_progress(
+    token_id: int,
+    task_id: str,
+    api_key: str = Depends(verify_api_key_header)
+):
+    """Get video generation task progress by task ID
+    
+    Args:
+        token_id: Token ID to use for query
+        task_id: Task ID (e.g., task_01kcybbj56fp7vctvpmx0drrw1)
+    
+    Returns:
+        Task progress info:
+        - id: task ID
+        - status: task status (running/completed/failed)
+        - prompt: generation prompt
+        - title: task title
+        - progress_pct: progress percentage (0.0-1.0)
+        - generations: list of generated videos
+    """
+    try:
+        token_obj = await token_manager.get_token_by_id(token_id)
+        if not token_obj:
+            raise HTTPException(status_code=404, detail="Token not found")
+        
+        task = await generation_handler.sora_client.get_task_progress(task_id, token_obj.token)
+        
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found or already completed")
+        
+        return {
+            "success": True,
+            "task": task
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get task progress: {str(e)}")
+
+
 # ============================================================
 # WebDAV Proxy Download Endpoint (No authentication required)
 # ============================================================
