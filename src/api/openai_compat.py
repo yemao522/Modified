@@ -225,6 +225,104 @@ async def create_video(
 
 
 # ============================================================
+# /v1/test/video - Test Video Generation
+# ============================================================
+
+@router.post("/v1/test/video")
+async def test_create_video(
+    request: Request,
+    prompt: str = Form(None, description="Video generation prompt (use @username to reference characters)"),
+    model: str = Form("sora-video-10s", description="Model ID"),
+    seconds: Optional[str] = Form(None, description="Duration: '10' or '15'"),
+    orientation: Optional[str] = Form(None, description="Orientation: 'landscape' or 'portrait'"),
+    style_id: Optional[str] = Form(None, description="Video style: festive, retro, news, selfie, handheld, anime, comic, golden, vintage"),
+    input_reference: Optional[UploadFile] = File(None, description="Reference image file for image-to-video"),
+    input_image: Optional[str] = Form(None, description="Base64 encoded reference image for image-to-video"),
+    remix_target_id: Optional[str] = Form(None, description="Sora share link video ID for remix (e.g., s_xxx)"),
+    api_key: str = Depends(verify_api_key_header)
+):
+    """[TEST] Create video generation
+    
+    Same as /v1/videos but for testing purposes.
+    """
+    try:
+        # Check if JSON body
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            body = await request.json()
+            prompt = body.get("prompt", prompt)
+            model = body.get("model", model)
+            seconds = body.get("seconds", seconds)
+            orientation = body.get("orientation", orientation)
+            style_id = body.get("style_id", style_id)
+            input_image = body.get("input_image", input_image)
+            remix_target_id = body.get("remix_target_id", remix_target_id)
+        
+        if not prompt:
+            raise HTTPException(status_code=400, detail="prompt is required")
+        
+        # Determine model from seconds/orientation
+        final_model = model
+        if seconds or orientation:
+            duration = seconds or "10"
+            orient = orientation or "landscape"
+            if duration == "15":
+                final_model = f"sora-video-{'portrait' if orient == 'portrait' else 'landscape'}-15s"
+            else:
+                final_model = f"sora-video-{'portrait' if orient == 'portrait' else 'landscape'}-10s"
+        
+        # Validate model
+        if final_model not in MODEL_CONFIG:
+            raise HTTPException(status_code=400, detail=f"Invalid model: {final_model}")
+        
+        model_config = MODEL_CONFIG[final_model]
+        if model_config["type"] != "video":
+            raise HTTPException(status_code=400, detail=f"Model {final_model} is not a video model")
+        
+        # Process reference image for image-to-video
+        image_data = None
+        if input_reference:
+            content = await input_reference.read()
+            image_data = base64.b64encode(content).decode('utf-8')
+        elif input_image:
+            image_data = input_image
+            if "base64," in image_data:
+                image_data = image_data.split("base64,", 1)[1]
+        
+        # Non-streaming: collect all chunks and return final result
+        chunks = []
+        async for chunk in generation_handler.handle_generation(
+            model=final_model,
+            prompt=prompt,
+            image=image_data,
+            remix_target_id=remix_target_id,
+            stream=True,  # Internal streaming
+            style_id=style_id
+        ):
+            chunks.append(chunk)
+        
+        # Extract final URL
+        video_info = _extract_video_info_from_chunks(chunks)
+        url = video_info.get("url") or _extract_url_from_chunks(chunks)
+        permalink = video_info.get("permalink")
+        if url:
+            return JSONResponse(content={
+                "id": f"video-{uuid.uuid4().hex[:24]}",
+                "object": "video",
+                "created": int(time.time()),
+                "model": final_model,
+                "data": [{"url": url, "permalink": permalink, "revised_prompt": prompt}]
+            })
+        else:
+            raise HTTPException(status_code=500, detail="Video generation failed")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": {"message": str(e), "type": "server_error", "param": None, "code": None}})
+
+
+# ============================================================
 # /v1/images/generations - Image Generation
 # ============================================================
 
