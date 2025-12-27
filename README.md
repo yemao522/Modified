@@ -85,6 +85,27 @@ python main.py
 
 ---
 
+## 代理池配置
+
+在 `data/proxy.txt` 中配置代理列表，每行一个：
+
+```
+# 支持格式
+http://ip:port
+http://user:pass@ip:port
+socks5://ip:port
+ip:port
+ip:port:user:pass
+```
+
+**使用逻辑：**
+1. 在管理后台启用 `代理` 和 `代理池` 开关
+2. 每次请求 Sora API 时，自动轮询使用下一个代理
+3. 代理池为空时，回退到单代理配置
+4. 修改 `proxy.txt` 后，在管理后台点击"重载代理池"生效
+
+---
+
 ## API 文档
 
 详细 API 文档请参考：
