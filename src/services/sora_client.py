@@ -9,8 +9,10 @@ from typing import Optional, Dict, Any, Tuple
 from curl_cffi.requests import AsyncSession
 from curl_cffi import CurlMime
 from .proxy_manager import ProxyManager
+from .cloudflare_solver import solve_cloudflare_challenge, is_cloudflare_challenge
 from ..core.config import config
 from ..core.logger import debug_logger
+from ..core.http_utils import build_sora_headers, DEFAULT_USER_AGENT
 
 class SoraClient:
     """Sora API client with proxy support"""
@@ -103,60 +105,6 @@ class SoraClient:
             self._sessions[token] = AsyncSession(impersonate="chrome120")
         return self._sessions[token]
 
-    async def _solve_cloudflare_challenge(self, proxy_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """解决 Cloudflare challenge
-        
-        使用配置的 Cloudflare Solver API，最多重试3次
-        
-        Args:
-            proxy_url: 代理 URL（如 http://ip:port 或 http://user:pass@ip:port）
-            
-        Returns:
-            包含 cookies 和 user_agent 的字典，如 {"cookies": {...}, "user_agent": "..."}
-        """
-        import asyncio
-        import httpx
-        
-        max_retries = 3
-        
-        # 使用配置的 Cloudflare Solver API
-        if config.cloudflare_solver_enabled and config.cloudflare_solver_api_url:
-            api_url = config.cloudflare_solver_api_url
-            
-            for attempt in range(1, max_retries + 1):
-                try:
-                    print(f"🔄 调用 Cloudflare Solver API: {api_url} (尝试 {attempt}/{max_retries})")
-                    
-                    async with httpx.AsyncClient(timeout=120) as client:
-                        response = await client.get(api_url)
-                        
-                        if response.status_code == 200:
-                            data = response.json()
-                            if data.get("success"):
-                                cookies = data.get("cookies", {})
-                                user_agent = data.get("user_agent")
-                                print(f"✅ Cloudflare Solver API 返回成功，耗时 {data.get('elapsed_seconds', 0):.2f}s")
-                                return {"cookies": cookies, "user_agent": user_agent}
-                            else:
-                                print(f"⚠️ Cloudflare Solver API 返回失败: {data.get('error')}")
-                        else:
-                            print(f"⚠️ Cloudflare Solver API 请求失败: {response.status_code}")
-                            
-                except Exception as e:
-                    print(f"⚠️ Cloudflare Solver API 调用失败: {e}")
-                
-                # 如果不是最后一次尝试，等待后重试
-                if attempt < max_retries:
-                    wait_time = attempt * 2  # 2s, 4s
-                    print(f"⏳ 等待 {wait_time}s 后重试...")
-                    await asyncio.sleep(wait_time)
-            
-            print(f"❌ Cloudflare Solver API 调用失败，已重试 {max_retries} 次")
-        else:
-            print("⚠️ Cloudflare Solver API 未配置，请在配置文件中设置 cloudflare_solver_enabled 和 cloudflare_solver_api_url")
-        
-        return None
-
     async def _make_request(self, method: str, endpoint: str, token: str,
                            json_data: Optional[Dict] = None,
                            multipart: Optional[Dict] = None,
@@ -179,35 +127,17 @@ class SoraClient:
         
         proxy_url = await self.proxy_manager.get_proxy_url()
 
-        # 使用 Cloudflare 返回的 user_agent，如果有的话
-        user_agent = self._cf_user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-
-        # 完整的 Chrome 浏览器请求头
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Cache-Control": "no-cache",
-            "Origin": "https://sora.chatgpt.com",
-            "Pragma": "no-cache",
-            "Priority": "u=1, i",
-            "Referer": "https://sora.chatgpt.com/",
-            "User-Agent": user_agent,
-            "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-        }
-
-        # 只在生成请求时添加 sentinel token
-        if add_sentinel_token:
-            headers["openai-sentinel-token"] = self._generate_sentinel_token()
-
-        if not multipart:
-            headers["Content-Type"] = "application/json"
+        # 使用公共模块构建请求头
+        user_agent = self._cf_user_agent or DEFAULT_USER_AGENT
+        sentinel = self._generate_sentinel_token() if add_sentinel_token else None
+        content_type = None if multipart else "application/json"
+        
+        headers = build_sora_headers(
+            token=token,
+            user_agent=user_agent,
+            content_type=content_type,
+            sentinel_token=sentinel
+        )
 
         url = f"{self.base_url}{endpoint}"
         
@@ -278,14 +208,18 @@ class SoraClient:
 
             # Handle 429/403 rate limit with retry (Cloudflare challenge can return either)
             if response.status_code in [429, 403]:
-                # Check if it's a Cloudflare challenge
-                is_cf_challenge = 'cf-mitigated' in response.headers or 'Just a moment' in response.text
+                # 使用公共模块检测 Cloudflare challenge
+                is_cf = is_cloudflare_challenge(
+                    response.status_code, 
+                    dict(response.headers), 
+                    response.text
+                )
                 
                 # 如果是 Cloudflare challenge，每次都重新获取 cookie
-                if is_cf_challenge:
+                if is_cf:
                     print(f"🔄 检测到 Cloudflare challenge ({response.status_code}, attempt {attempt + 1})，重新获取 cookie...")
                     try:
-                        cf_result = await self._solve_cloudflare_challenge(proxy_url)
+                        cf_result = await solve_cloudflare_challenge(proxy_url)
                         if cf_result:
                             cf_cookies = cf_result.get("cookies", {})
                             cf_user_agent = cf_result.get("user_agent")
@@ -320,7 +254,7 @@ class SoraClient:
                         wait_time = min((attempt + 1) * 2, 30)  # Exponential backoff, cap at 30s
                     
                     retry_msg = "infinite" if infinite_retry_429 else f"{attempt + 1}/{max_retries}"
-                    cf_msg = " (Cloudflare challenge)" if is_cf_challenge else ""
+                    cf_msg = " (Cloudflare challenge)" if is_cf else ""
                     print(f"⚠️ 429 Rate limit{cf_msg}, retrying in {wait_time}s (attempt {retry_msg})")
                     debug_logger.log_info(f"429 Rate limit{cf_msg}, waiting {wait_time}s before retry {retry_msg}")
                     await asyncio.sleep(wait_time)

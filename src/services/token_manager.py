@@ -10,7 +10,9 @@ from ..core.database import Database
 from ..core.models import Token, TokenStats
 from ..core.config import config
 from .proxy_manager import ProxyManager
+from .cloudflare_solver import solve_cloudflare_challenge, is_cloudflare_challenge
 from ..core.logger import debug_logger
+from ..core.http_utils import build_simple_headers
 
 class TokenManager:
     """Token lifecycle manager"""
@@ -74,18 +76,18 @@ class TokenManager:
             else:
                 raise ValueError(f"Unsupported method: {method}")
             
-            # 检查是否是 Cloudflare challenge (429 或 403)
+            # 使用公共模块检测 Cloudflare challenge
             if response.status_code in [429, 403]:
                 response_text = response.text[:1000] if response.text else ''
-                is_cf_challenge = (
-                    "Just a moment" in response_text or 
-                    "challenge-platform" in response_text or 
-                    "cf-mitigated" in str(response.headers)
+                is_cf = is_cloudflare_challenge(
+                    response.status_code,
+                    dict(response.headers),
+                    response_text
                 )
                 
-                if is_cf_challenge and attempt < max_cf_retries:
+                if is_cf and attempt < max_cf_retries:
                     print(f"🔄 检测到 Cloudflare challenge ({response.status_code}, attempt {attempt + 1}/{max_cf_retries})，尝试解决...")
-                    cf_result = await self._solve_cloudflare(proxy_url)
+                    cf_result = await solve_cloudflare_challenge(proxy_url)
                     if cf_result:
                         cf_cookies = cf_result.get("cookies", {})
                         cf_user_agent = cf_result.get("user_agent")
@@ -184,56 +186,6 @@ class TokenManager:
                     raise ValueError(f"{response.status_code} - {response_text[:500]}")
 
             return response.json()
-    
-    async def _solve_cloudflare(self, proxy_url: str = None) -> dict:
-        """解决 Cloudflare challenge
-        
-        使用配置的 Cloudflare Solver API，最多重试3次
-        
-        Returns:
-            包含 cookies 和 user_agent 的字典，失败返回 None
-        """
-        import httpx
-        
-        max_retries = 3
-        
-        # 使用配置的 Cloudflare Solver API
-        if config.cloudflare_solver_enabled and config.cloudflare_solver_api_url:
-            api_url = config.cloudflare_solver_api_url
-            
-            for attempt in range(1, max_retries + 1):
-                try:
-                    print(f"🔄 调用 Cloudflare Solver API: {api_url} (尝试 {attempt}/{max_retries})")
-                    
-                    async with httpx.AsyncClient(timeout=120) as client:
-                        response = await client.get(api_url)
-                        
-                        if response.status_code == 200:
-                            data = response.json()
-                            if data.get("success"):
-                                cookies = data.get("cookies", {})
-                                user_agent = data.get("user_agent")
-                                print(f"✅ Cloudflare Solver API 返回成功，耗时 {data.get('elapsed_seconds', 0):.2f}s")
-                                return {"cookies": cookies, "user_agent": user_agent}
-                            else:
-                                print(f"⚠️ Cloudflare Solver API 返回失败: {data.get('error')}")
-                        else:
-                            print(f"⚠️ Cloudflare Solver API 请求失败: {response.status_code}")
-                            
-                except Exception as e:
-                    print(f"⚠️ Cloudflare Solver API 调用失败: {e}")
-                
-                # 如果不是最后一次尝试，等待后重试
-                if attempt < max_retries:
-                    wait_time = attempt * 2  # 2s, 4s
-                    print(f"⏳ 等待 {wait_time}s 后重试...")
-                    await asyncio.sleep(wait_time)
-            
-            print(f"❌ Cloudflare Solver API 调用失败，已重试 {max_retries} 次")
-        else:
-            print("⚠️ Cloudflare Solver API 未配置，请在配置文件中设置 cloudflare_solver_enabled 和 cloudflare_solver_api_url")
-        
-        return None
 
     async def get_subscription_info(self, token: str) -> Dict[str, Any]:
         """Get subscription information from Sora API
