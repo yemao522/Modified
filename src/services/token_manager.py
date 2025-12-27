@@ -74,8 +74,8 @@ class TokenManager:
             else:
                 raise ValueError(f"Unsupported method: {method}")
             
-            # 检查是否是 Cloudflare challenge
-            if response.status_code == 429:
+            # 检查是否是 Cloudflare challenge (429 或 403)
+            if response.status_code in [429, 403]:
                 response_text = response.text[:1000] if response.text else ''
                 is_cf_challenge = (
                     "Just a moment" in response_text or 
@@ -84,7 +84,7 @@ class TokenManager:
                 )
                 
                 if is_cf_challenge and attempt < max_cf_retries:
-                    print(f"🔄 检测到 Cloudflare challenge (attempt {attempt + 1}/{max_cf_retries})，尝试解决...")
+                    print(f"🔄 检测到 Cloudflare challenge ({response.status_code}, attempt {attempt + 1}/{max_cf_retries})，尝试解决...")
                     cf_result = await self._solve_cloudflare(proxy_url)
                     if cf_result:
                         cf_cookies = cf_result.get("cookies", {})

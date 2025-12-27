@@ -285,14 +285,14 @@ class SoraClient:
                 duration_ms=duration_ms
             )
 
-            # Handle 429 rate limit with retry
-            if response.status_code == 429:
-                # Check if it's a Cloudflare challenge (fake 429)
+            # Handle 429/403 rate limit with retry (Cloudflare challenge can return either)
+            if response.status_code in [429, 403]:
+                # Check if it's a Cloudflare challenge
                 is_cf_challenge = 'cf-mitigated' in response.headers or 'Just a moment' in response.text
                 
                 # 如果是 Cloudflare challenge，每次都重新获取 cookie
                 if is_cf_challenge:
-                    print(f"🔄 检测到 Cloudflare challenge (attempt {attempt + 1})，重新获取 cookie...")
+                    print(f"🔄 检测到 Cloudflare challenge ({response.status_code}, attempt {attempt + 1})，重新获取 cookie...")
                     try:
                         cf_result = await self._solve_cloudflare_challenge(proxy_url)
                         if cf_result:
@@ -316,7 +316,8 @@ class SoraClient:
                     except Exception as cf_error:
                         print(f"⚠️ Cloudflare 解决失败: {cf_error}")
                 
-                if infinite_retry_429 or attempt < max_retries:
+                # 只有 429 才进行普通重试
+                if response.status_code == 429 and (infinite_retry_429 or attempt < max_retries):
                     # Get retry-after header or use exponential backoff
                     retry_after = response.headers.get("Retry-After")
                     if retry_after:
@@ -334,7 +335,7 @@ class SoraClient:
                     await asyncio.sleep(wait_time)
                     attempt += 1
                     continue
-                else:
+                elif response.status_code == 429:
                     error_msg = f"Rate limit exceeded after {max_retries} retries"
                     debug_logger.log_error(
                         error_message=error_msg,
