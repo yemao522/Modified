@@ -188,60 +188,52 @@ class TokenManager:
     async def _solve_cloudflare(self, proxy_url: str = None) -> dict:
         """解决 Cloudflare challenge
         
-        优先使用配置的 Cloudflare Solver API，如果未配置则使用本地 DrissionPage
+        使用配置的 Cloudflare Solver API，最多重试3次
         
         Returns:
-            包含 cookies 和 user_agent 的字典
+            包含 cookies 和 user_agent 的字典，失败返回 None
         """
         import httpx
-        from concurrent.futures import ThreadPoolExecutor
         
-        # 优先使用配置的 Cloudflare Solver API
+        max_retries = 3
+        
+        # 使用配置的 Cloudflare Solver API
         if config.cloudflare_solver_enabled and config.cloudflare_solver_api_url:
-            try:
-                api_url = config.cloudflare_solver_api_url
-                print(f"🔄 调用 Cloudflare Solver API: {api_url}")
-                
-                async with httpx.AsyncClient(timeout=120) as client:
-                    response = await client.get(api_url)
+            api_url = config.cloudflare_solver_api_url
+            
+            for attempt in range(1, max_retries + 1):
+                try:
+                    print(f"🔄 调用 Cloudflare Solver API: {api_url} (尝试 {attempt}/{max_retries})")
                     
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("success"):
-                            cookies = data.get("cookies", {})
-                            user_agent = data.get("user_agent")
-                            print(f"✅ Cloudflare Solver API 返回成功，耗时 {data.get('elapsed_seconds', 0):.2f}s")
-                            return {"cookies": cookies, "user_agent": user_agent}
-                        else:
-                            print(f"⚠️ Cloudflare Solver API 返回失败: {data.get('error')}")
-                    else:
-                        print(f"⚠️ Cloudflare Solver API 请求失败: {response.status_code}")
+                    async with httpx.AsyncClient(timeout=120) as client:
+                        response = await client.get(api_url)
                         
-            except Exception as e:
-                print(f"⚠️ Cloudflare Solver API 调用失败: {e}")
-        
-        # 如果 API 未配置或失败，尝试使用本地 DrissionPage
-        def solve_sync():
-            try:
-                from .cloudflare_solver import CloudflareSolver
+                        if response.status_code == 200:
+                            data = response.json()
+                            if data.get("success"):
+                                cookies = data.get("cookies", {})
+                                user_agent = data.get("user_agent")
+                                print(f"✅ Cloudflare Solver API 返回成功，耗时 {data.get('elapsed_seconds', 0):.2f}s")
+                                return {"cookies": cookies, "user_agent": user_agent}
+                            else:
+                                print(f"⚠️ Cloudflare Solver API 返回失败: {data.get('error')}")
+                        else:
+                            print(f"⚠️ Cloudflare Solver API 请求失败: {response.status_code}")
+                            
+                except Exception as e:
+                    print(f"⚠️ Cloudflare Solver API 调用失败: {e}")
                 
-                proxy = None
-                if proxy_url:
-                    proxy = proxy_url.replace("http://", "").replace("https://", "")
-                
-                solver = CloudflareSolver(proxy=proxy, headless=True, timeout=60)
-                solution = solver.solve("https://sora.chatgpt.com")
-                return {"cookies": solution.cookies, "user_agent": solution.user_agent}
-            except ImportError:
-                print("⚠️ DrissionPage 未安装，无法本地解决 Cloudflare challenge")
-                return None
-            except Exception as e:
-                print(f"⚠️ 本地 Cloudflare 解决失败: {e}")
-                return None
+                # 如果不是最后一次尝试，等待后重试
+                if attempt < max_retries:
+                    wait_time = attempt * 2  # 2s, 4s
+                    print(f"⏳ 等待 {wait_time}s 后重试...")
+                    await asyncio.sleep(wait_time)
+            
+            print(f"❌ Cloudflare Solver API 调用失败，已重试 {max_retries} 次")
+        else:
+            print("⚠️ Cloudflare Solver API 未配置，请在配置文件中设置 cloudflare_solver_enabled 和 cloudflare_solver_api_url")
         
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, solve_sync)
+        return None
 
     async def get_subscription_info(self, token: str) -> Dict[str, Any]:
         """Get subscription information from Sora API

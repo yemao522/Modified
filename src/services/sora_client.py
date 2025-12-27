@@ -106,7 +106,7 @@ class SoraClient:
     async def _solve_cloudflare_challenge(self, proxy_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """解决 Cloudflare challenge
         
-        优先使用配置的 Cloudflare Solver API，如果未配置则使用本地 DrissionPage
+        使用配置的 Cloudflare Solver API，最多重试3次
         
         Args:
             proxy_url: 代理 URL（如 http://ip:port 或 http://user:pass@ip:port）
@@ -117,29 +117,43 @@ class SoraClient:
         import asyncio
         import httpx
         
-        # 优先使用配置的 Cloudflare Solver API
+        max_retries = 3
+        
+        # 使用配置的 Cloudflare Solver API
         if config.cloudflare_solver_enabled and config.cloudflare_solver_api_url:
-            try:
-                api_url = config.cloudflare_solver_api_url
-                print(f"🔄 调用 Cloudflare Solver API: {api_url}")
-                
-                async with httpx.AsyncClient(timeout=120) as client:
-                    response = await client.get(api_url)
+            api_url = config.cloudflare_solver_api_url
+            
+            for attempt in range(1, max_retries + 1):
+                try:
+                    print(f"🔄 调用 Cloudflare Solver API: {api_url} (尝试 {attempt}/{max_retries})")
                     
-                    if response.status_code == 200:
-                        data = response.json()
-                        if data.get("success"):
-                            cookies = data.get("cookies", {})
-                            user_agent = data.get("user_agent")
-                            print(f"✅ Cloudflare Solver API 返回成功，耗时 {data.get('elapsed_seconds', 0):.2f}s")
-                            return {"cookies": cookies, "user_agent": user_agent}
-                        else:
-                            print(f"⚠️ Cloudflare Solver API 返回失败: {data.get('error')}")
-                    else:
-                        print(f"⚠️ Cloudflare Solver API 请求失败: {response.status_code}")
+                    async with httpx.AsyncClient(timeout=120) as client:
+                        response = await client.get(api_url)
                         
-            except Exception as e:
-                print(f"⚠️ Cloudflare Solver API 调用失败: {e}")
+                        if response.status_code == 200:
+                            data = response.json()
+                            if data.get("success"):
+                                cookies = data.get("cookies", {})
+                                user_agent = data.get("user_agent")
+                                print(f"✅ Cloudflare Solver API 返回成功，耗时 {data.get('elapsed_seconds', 0):.2f}s")
+                                return {"cookies": cookies, "user_agent": user_agent}
+                            else:
+                                print(f"⚠️ Cloudflare Solver API 返回失败: {data.get('error')}")
+                        else:
+                            print(f"⚠️ Cloudflare Solver API 请求失败: {response.status_code}")
+                            
+                except Exception as e:
+                    print(f"⚠️ Cloudflare Solver API 调用失败: {e}")
+                
+                # 如果不是最后一次尝试，等待后重试
+                if attempt < max_retries:
+                    wait_time = attempt * 2  # 2s, 4s
+                    print(f"⏳ 等待 {wait_time}s 后重试...")
+                    await asyncio.sleep(wait_time)
+            
+            print(f"❌ Cloudflare Solver API 调用失败，已重试 {max_retries} 次")
+        else:
+            print("⚠️ Cloudflare Solver API 未配置，请在配置文件中设置 cloudflare_solver_enabled 和 cloudflare_solver_api_url")
         
         return None
 
