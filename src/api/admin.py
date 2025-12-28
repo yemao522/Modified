@@ -1004,6 +1004,8 @@ async def get_logs(limit: int = 100, token: str = Depends(verify_admin_token)):
         "operation": log.get("operation"),
         "status_code": log.get("status_code"),
         "duration": log.get("duration"),
+        "request_body": log.get("request_body"),
+        "response_body": log.get("response_body"),
         "created_at": log.get("created_at")
     } for log in logs]
 
