@@ -345,6 +345,32 @@ async def delete_token(token_id: int, token: str = Depends(verify_admin_token)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.post("/api/tokens/batch-test")
+async def batch_test_tokens(
+    only_active: bool = True,
+    only_disabled: bool = False,
+    token: str = Depends(verify_admin_token)
+):
+    """Batch test all tokens
+
+    - only_active=True: Test only active tokens, auto-disable 401 tokens
+    - only_disabled=True: Test only disabled tokens, auto-enable valid tokens
+    - Both False: Test all tokens
+    """
+    try:
+        result = await token_manager.batch_test_tokens(
+            only_active=only_active,
+            only_disabled=only_disabled
+        )
+        return {
+            "success": True,
+            "message": f"测试完成: {result['valid']} 有效, {result['invalid']} 无效, "
+                      f"{result['auto_disabled']} 已自动禁用, {result['auto_enabled']} 已自动启用",
+            **result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量测试失败: {str(e)}")
+
 @router.post("/api/tokens/import")
 async def import_tokens(request: ImportTokensRequest, token: str = Depends(verify_admin_token)):
     """Import tokens in append mode (update if exists, add if not)"""

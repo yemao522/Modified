@@ -9,6 +9,7 @@ from pathlib import Path
 # Import modules
 from .core.config import config
 from .core.database import Database
+from .core.db_pool import init_pool, close_pool
 from .services.token_manager import TokenManager
 from .services.proxy_manager import ProxyManager
 from .services.load_balancer import LoadBalancer
@@ -16,6 +17,7 @@ from .services.sora_client import SoraClient
 from .services.generation_handler import GenerationHandler
 from .services.concurrency_manager import ConcurrencyManager
 from .services.webdav_manager import WebDAVManager
+from .services.token_cache import get_token_cache
 from .api import routes as api_routes
 from .api import admin as admin_routes
 from .api import public as public_routes
@@ -110,6 +112,10 @@ async def startup_event():
     # Initialize database tables
     await db.init_db()
 
+    # Initialize database connection pool for better concurrency
+    await init_pool(db.db_path, pool_size=5)
+    print("✓ Database connection pool initialized (pool_size=5, WAL mode)")
+
     # Handle database initialization based on startup type
     if is_first_startup:
         print("🎉 First startup detected. Initializing database and configuration from setting.toml...")
@@ -154,6 +160,11 @@ async def startup_event():
     await concurrency_manager.initialize(all_tokens)
     print(f"✓ Concurrency manager initialized with {len(all_tokens)} tokens")
 
+    # Initialize token cache
+    token_cache = get_token_cache()
+    await token_cache.refresh(db)
+    print(f"✓ Token cache initialized")
+
     # Start file cache cleanup task
     await generation_handler.file_cache.start_cleanup_task()
 
@@ -161,6 +172,9 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup on shutdown"""
     await generation_handler.file_cache.stop_cleanup_task()
+    # Close database connection pool
+    await close_pool()
+    print("✓ Database connection pool closed")
 
 if __name__ == "__main__":
     uvicorn.run(

@@ -148,6 +148,35 @@
                             </svg>
                             <span class="text-sm font-medium">一键激活</span>
                         </button>
+                        <!-- 批量测试下拉菜单 -->
+                        <div class="relative inline-block">
+                            <button onclick="toggleBatchTestMenu()" class="inline-flex items-center justify-center rounded-md bg-cyan-600 text-white hover:bg-cyan-700 h-8 px-3" title="批量测试账号状态">
+                                <svg class="h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M9 11l3 3L22 4"/>
+                                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                                </svg>
+                                <span class="text-sm font-medium">批量测试</span>
+                                <svg class="h-4 w-4 ml-1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="6 9 12 15 18 9"/>
+                                </svg>
+                            </button>
+                            <div id="batchTestMenu" class="hidden absolute right-0 mt-1 w-48 rounded-md shadow-lg bg-white border border-border z-50">
+                                <div class="py-1">
+                                    <button onclick="batchTestActiveTokens()" class="w-full text-left px-4 py-2 text-sm hover:bg-gray-100">
+                                        测试已启用账号
+                                        <p class="text-xs text-muted-foreground">401自动禁用</p>
+                                    </button>
+                                    <button onclick="batchTestDisabledTokens()" class="w-full text-left px-4 py-2 text-sm hover:bg-gray-100">
+                                        测试已禁用账号
+                                        <p class="text-xs text-muted-foreground">有效自动启用</p>
+                                    </button>
+                                    <button onclick="batchTestAllTokens()" class="w-full text-left px-4 py-2 text-sm hover:bg-gray-100">
+                                        测试所有账号
+                                        <p class="text-xs text-muted-foreground">自动禁用/启用</p>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -1113,7 +1142,12 @@
         deleteAllWebdavVideos=async()=>{if(!confirm('确定要删除所有视频吗? 此操作不可恢复!'))return;try{const r=await apiRequest('/api/webdav/videos/delete-all',{method:'POST'});if(!r)return;const d=await r.json();if(d.success){showToast(`删除完成: ${d.deleted}个成功, ${d.failed}个失败`,'success');refreshWebdavVideos();loadWebdavStats();refreshUploadLogs()}else{showToast('删除失败: '+(d.message||'未知错误'),'error')}}catch(e){showToast('删除失败: '+e.message,'error')}},
         triggerAutoDelete=async()=>{if(!confirm('确定要执行自动删除吗?'))return;try{const r=await apiRequest('/api/webdav/videos/auto-delete',{method:'POST'});if(!r)return;const d=await r.json();if(d.success){showToast(`自动删除完成: ${d.deleted}个成功, ${d.failed}个失败`,'success');refreshWebdavVideos();loadWebdavStats();refreshUploadLogs()}else{showToast('执行失败: '+(d.message||'未知错误'),'error')}}catch(e){showToast('执行失败: '+e.message,'error')}},
         clearVideoRecords=async()=>{if(!confirm('确定要清空所有视频记录吗? 此操作不会删除WebDAV上的文件!'))return;try{const r=await apiRequest('/api/webdav/videos/clear-records',{method:'POST'});if(!r)return;const d=await r.json();if(d.success){showToast('视频记录已清空','success');refreshWebdavVideos();loadWebdavStats()}else{showToast('清空失败: '+(d.message||'未知错误'),'error')}}catch(e){showToast('清空失败: '+e.message,'error')}},
-        clearUploadLogs=async()=>{if(!confirm('确定要清空所有上传日志吗?'))return;try{const r=await apiRequest('/api/webdav/logs/clear',{method:'POST'});if(!r)return;const d=await r.json();if(d.success){showToast('上传日志已清空','success');refreshUploadLogs()}else{showToast('清空失败: '+(d.message||'未知错误'),'error')}}catch(e){showToast('清空失败: '+e.message,'error')}};
+        clearUploadLogs=async()=>{if(!confirm('确定要清空所有上传日志吗?'))return;try{const r=await apiRequest('/api/webdav/logs/clear',{method:'POST'});if(!r)return;const d=await r.json();if(d.success){showToast('上传日志已清空','success');refreshUploadLogs()}else{showToast('清空失败: '+(d.message||'未知错误'),'error')}}catch(e){showToast('清空失败: '+e.message,'error')}},
+        // 批量测试功能
+        toggleBatchTestMenu=()=>{const menu=$('batchTestMenu');menu.classList.toggle('hidden');document.addEventListener('click',function closeMenu(e){if(!e.target.closest('#batchTestMenu')&&!e.target.closest('[onclick*="toggleBatchTestMenu"]')){menu.classList.add('hidden');document.removeEventListener('click',closeMenu)}},{once:false})},
+        batchTestActiveTokens=async()=>{$('batchTestMenu').classList.add('hidden');if(!confirm('将测试所有已启用的账号，401错误将自动禁用，是否继续？'))return;showToast('开始批量测试已启用账号...','info');try{const r=await apiRequest('/api/tokens/batch-test?only_active=true&only_disabled=false',{method:'POST'});if(!r)return;const d=await r.json();if(d.success){showToast(d.message,'success');await refreshTokens()}else{showToast('批量测试失败: '+(d.detail||d.message||'未知错误'),'error')}}catch(e){showToast('批量测试失败: '+e.message,'error')}},
+        batchTestDisabledTokens=async()=>{$('batchTestMenu').classList.add('hidden');if(!confirm('将测试所有已禁用的账号，有效账号将自动启用，是否继续？'))return;showToast('开始批量测试已禁用账号...','info');try{const r=await apiRequest('/api/tokens/batch-test?only_active=false&only_disabled=true',{method:'POST'});if(!r)return;const d=await r.json();if(d.success){showToast(d.message,'success');await refreshTokens()}else{showToast('批量测试失败: '+(d.detail||d.message||'未知错误'),'error')}}catch(e){showToast('批量测试失败: '+e.message,'error')}},
+        batchTestAllTokens=async()=>{$('batchTestMenu').classList.add('hidden');if(!confirm('将测试所有账号，401错误自动禁用，有效账号自动启用，是否继续？'))return;showToast('开始批量测试所有账号...','info');try{const r=await apiRequest('/api/tokens/batch-test?only_active=false&only_disabled=false',{method:'POST'});if(!r)return;const d=await r.json();if(d.success){showToast(d.message,'success');await refreshTokens()}else{showToast('批量测试失败: '+(d.detail||d.message||'未知错误'),'error')}}catch(e){showToast('批量测试失败: '+e.message,'error')}};
         window.addEventListener('DOMContentLoaded',()=>{checkAuth();refreshTokens();loadATAutoRefreshConfig()});
     </script>
 </body>

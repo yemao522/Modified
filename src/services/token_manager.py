@@ -17,16 +17,18 @@ from .cloudflare_solver import (
 )
 from ..core.logger import debug_logger
 from ..core.http_utils import build_simple_headers
+from .token_cache import get_token_cache
 
 
 class TokenManager:
-    """Token lifecycle manager"""
+    """Token lifecycle manager with caching support"""
 
     def __init__(self, db: Database):
         self.db = db
         self._lock = asyncio.Lock()
         self.proxy_manager = ProxyManager(db)
         self.fake = Faker()
+        self._token_cache = get_token_cache()
 
     async def _make_sora_request(
         self,
@@ -876,6 +878,9 @@ class TokenManager:
         # Save to database
         token_id = await self.db.add_token(token)
         token.id = token_id
+        
+        # Invalidate cache after adding new token
+        self._token_cache.invalidate()
 
         return token
 
@@ -935,6 +940,8 @@ class TokenManager:
     async def delete_token(self, token_id: int):
         """Delete a token"""
         await self.db.delete_token(token_id)
+        # Invalidate cache after deletion
+        self._token_cache.invalidate()
 
     async def update_token(self, token_id: int,
                           token: Optional[str] = None,
@@ -959,32 +966,51 @@ class TokenManager:
         await self.db.update_token(token_id, token=token, st=st, rt=rt, client_id=client_id, remark=remark, expiry_time=expiry_time,
                                    image_enabled=image_enabled, video_enabled=video_enabled,
                                    image_concurrency=image_concurrency, video_concurrency=video_concurrency)
+        # Invalidate cache after update
+        self._token_cache.invalidate()
 
     async def get_active_tokens(self) -> List[Token]:
-        """Get all active tokens (not cooled down)"""
-        return await self.db.get_active_tokens()
+        """Get all active tokens (not cooled down) with caching"""
+        # Check if cache needs refresh
+        if self._token_cache.is_stale:
+            await self._token_cache.refresh(self.db)
+        return self._token_cache.get_active_tokens()
     
     async def get_all_tokens(self) -> List[Token]:
-        """Get all tokens"""
-        return await self.db.get_all_tokens()
+        """Get all tokens with caching"""
+        # Check if cache needs refresh
+        if self._token_cache.is_stale:
+            await self._token_cache.refresh(self.db)
+        return self._token_cache.get_all_tokens()
 
     async def get_token_by_id(self, token_id: int) -> Optional[Token]:
         """Get a specific token by ID"""
+        # Try cache first
+        token = self._token_cache.get_token(token_id)
+        if token:
+            return token
+        # Fallback to database
         return await self.db.get_token(token_id)
     
     async def update_token_status(self, token_id: int, is_active: bool):
         """Update token active status"""
         await self.db.update_token_status(token_id, is_active)
+        # Invalidate cache after status change
+        self._token_cache.invalidate()
 
     async def enable_token(self, token_id: int):
         """Enable a token and reset error count"""
         await self.db.update_token_status(token_id, True)
         # Reset error count when enabling (in token_stats table)
         await self.db.reset_error_count(token_id)
+        # Invalidate cache
+        self._token_cache.invalidate()
 
     async def disable_token(self, token_id: int):
         """Disable a token"""
         await self.db.update_token_status(token_id, False)
+        # Invalidate cache
+        self._token_cache.invalidate()
 
     async def test_token(self, token_id: int) -> dict:
         """Test if a token is valid by calling Sora API and refresh Sora2 info"""
@@ -1109,6 +1135,149 @@ class TokenManager:
                     print(f"Failed to refresh Sora2 remaining count: {e}")
         except Exception as e:
             print(f"Error in refresh_sora2_remaining_if_cooldown_expired: {e}")
+
+    async def test_token_validity(self, token_id: int) -> dict:
+        """Test if a token is valid (lightweight version, just check API access)
+
+        Returns:
+            {
+                "valid": True/False,
+                "status_code": 200/401/403/etc,
+                "message": "...",
+                "email": "...",
+                "username": "..."
+            }
+        """
+        token_data = await self.db.get_token(token_id)
+        if not token_data:
+            return {"valid": False, "status_code": 0, "message": "Token not found"}
+
+        try:
+            user_info = await self.get_user_info(token_data.token)
+            return {
+                "valid": True,
+                "status_code": 200,
+                "message": "Token is valid",
+                "email": user_info.get("email"),
+                "username": user_info.get("username")
+            }
+        except ValueError as e:
+            error_msg = str(e)
+            # Extract status code from error message
+            status_code = 0
+            if error_msg.startswith("401"):
+                status_code = 401
+            elif error_msg.startswith("403"):
+                status_code = 403
+            elif error_msg.startswith("429"):
+                status_code = 429
+            else:
+                # Try to extract status code
+                import re
+                match = re.match(r'^(\d+)', error_msg)
+                if match:
+                    status_code = int(match.group(1))
+
+            return {
+                "valid": False,
+                "status_code": status_code,
+                "message": error_msg
+            }
+        except Exception as e:
+            return {
+                "valid": False,
+                "status_code": 0,
+                "message": str(e)
+            }
+
+    async def batch_test_tokens(self, only_active: bool = True, only_disabled: bool = False, max_concurrency: int = 5) -> dict:
+        """Batch test all tokens with concurrency control
+
+        Args:
+            only_active: If True, only test active tokens
+            only_disabled: If True, only test disabled tokens
+            max_concurrency: Maximum concurrent test requests (default: 5)
+
+        Returns:
+            {
+                "total": 10,
+                "tested": 10,
+                "valid": 8,
+                "invalid": 2,
+                "auto_disabled": 1,
+                "auto_enabled": 0,
+                "results": [...]
+            }
+        """
+        if only_disabled:
+            # Get disabled tokens
+            all_tokens = await self.db.get_all_tokens()
+            tokens = [t for t in all_tokens if not t.is_active]
+        elif only_active:
+            tokens = await self.db.get_active_tokens()
+        else:
+            tokens = await self.db.get_all_tokens()
+
+        results = []
+        valid_count = 0
+        invalid_count = 0
+        auto_disabled_count = 0
+        auto_enabled_count = 0
+        
+        # 使用信号量控制并发
+        semaphore = asyncio.Semaphore(max_concurrency)
+        results_lock = asyncio.Lock()
+        
+        async def test_single_token(token):
+            nonlocal valid_count, invalid_count, auto_disabled_count, auto_enabled_count
+            
+            async with semaphore:
+                # Add delay between tests to avoid rate limiting
+                await asyncio.sleep(0.3)
+                
+                test_result = await self.test_token_validity(token.id)
+
+                result_item = {
+                    "token_id": token.id,
+                    "email": token.email,
+                    "was_active": token.is_active,
+                    "valid": test_result["valid"],
+                    "status_code": test_result["status_code"],
+                    "message": test_result["message"],
+                    "action": None
+                }
+
+                async with results_lock:
+                    if test_result["valid"]:
+                        valid_count += 1
+                        # If token was disabled but is now valid, enable it
+                        if not token.is_active:
+                            await self.enable_token(token.id)
+                            result_item["action"] = "auto_enabled"
+                            auto_enabled_count += 1
+                    else:
+                        invalid_count += 1
+                        # If token is active and returns 401, disable it
+                        if token.is_active and test_result["status_code"] == 401:
+                            await self.disable_token(token.id)
+                            result_item["action"] = "auto_disabled"
+                            auto_disabled_count += 1
+
+                    results.append(result_item)
+        
+        # 并发执行所有测试
+        tasks = [test_single_token(token) for token in tokens]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        return {
+            "total": len(tokens),
+            "tested": len(results),
+            "valid": valid_count,
+            "invalid": invalid_count,
+            "auto_disabled": auto_disabled_count,
+            "auto_enabled": auto_enabled_count,
+            "results": results
+        }
 
     async def auto_refresh_expiring_token(self, token_id: int) -> bool:
         """

@@ -13,9 +13,10 @@ class CloudflareState:
     所有请求都使用相同的凭据，直到遇到新的 429 challenge 或凭据过期。
     
     特性：
-    - 线程安全（使用 threading.Lock）
+    - 线程安全（使用 threading.RLock 避免死锁）
     - 凭据有效期 10 分钟，自动过期
     - 遇到 429/403 时自动标记凭据无效
+    - 读操作使用快照避免长时间持锁
     """
     
     # 凭据有效期（秒）
@@ -26,7 +27,8 @@ class CloudflareState:
         self._user_agent: Optional[str] = None
         self._last_updated: Optional[datetime] = None
         self._is_valid: bool = False
-        self._lock = threading.Lock()
+        # 使用 RLock 避免同一线程重入死锁
+        self._lock = threading.RLock()
     
     @property
     def cookies(self) -> Dict[str, str]:
