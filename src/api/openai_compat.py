@@ -248,8 +248,13 @@ async def create_chat_completion(
                         style_id=request.style_id
                     ):
                         yield chunk
+                except GeneratorExit:
+                    # Client disconnected, clean exit
+                    pass
                 except Exception as e:
                     # Return OpenAI-compatible error format
+                    import traceback
+                    traceback.print_exc()
                     error_response = {
                         "error": {
                             "message": str(e),

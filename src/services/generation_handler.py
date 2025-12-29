@@ -1231,12 +1231,13 @@ class GenerationHandler:
                                 username: str = None, display_name: str = None,
                                 cameo_id: str = None, character_id: str = None,
                                 error: str = None) -> str:
-        """Format structured result content as JSON string
+        """Format result content in Markdown format (compatible with original project)
 
         Args:
             result_type: Type of result ("image", "video", "character", "error")
             urls: List of URLs (for images)
             url: Single URL (for video)
+            permalink: Video permalink
             username: Character username
             display_name: Character display name
             cameo_id: Character cameo ID
@@ -1244,47 +1245,27 @@ class GenerationHandler:
             error: Error message
 
         Returns:
-            JSON string with structured result data
+            Markdown formatted string for display
         """
-        result = {"type": result_type}
-
         if result_type == "image":
-            result["urls"] = urls or []
-            result["count"] = len(urls) if urls else 0
-            # OpenAI Images API compatible format
-            result["data"] = [{"url": u} for u in (urls or [])]
+            # Return Markdown image format: ![Generated Image](url)
+            if urls:
+                return "\n".join([f"![Generated Image]({u})" for u in urls])
+            return ""
 
         elif result_type == "video":
-            result["url"] = url
-            if permalink is not None:
-                result["permalink"] = permalink
-            # OpenAI Sora API compatible format
-            video_item = {
-                "url": url,
-                "permalink": permalink,
-                "revised_prompt": None
-            }
-            video_item = {k: v for k, v in video_item.items() if v is not None}
-            result["data"] = [video_item]
+            # Return HTML video tag in code block (original project format)
+            return f"```html\n<video src='{url}' controls></video>\n```"
 
         elif result_type == "character":
-            result["username"] = username
-            result["display_name"] = display_name
-            result["cameo_id"] = cameo_id
-            result["character_id"] = character_id
-            # Structured data format
-            result["data"] = {
-                "username": username,
-                "display_name": display_name,
-                "cameo_id": cameo_id,
-                "character_id": character_id
-            }
+            # Return character creation success message
+            return f"角色创建成功，角色名@{username}"
 
         elif result_type == "error":
-            result["error"] = error
-            result["data"] = {"error": error}
+            # Return error message
+            return f"❌ 生成失败: {error}"
 
-        return json.dumps(result, ensure_ascii=False)
+        return ""
 
     def _infer_stage_from_message(self, message: str) -> str:
         """Infer stage from reasoning message content"""
