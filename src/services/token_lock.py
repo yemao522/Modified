@@ -114,4 +114,3 @@ class TokenLock:
         """Set lock timeout in seconds"""
         self.lock_timeout = timeout
         debug_logger.log_info(f"Lock timeout updated to {timeout} seconds")
-
