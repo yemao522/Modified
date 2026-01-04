@@ -614,7 +614,7 @@ async def get_video_content(
 ):
     """Download video content (OpenAI Sora Compatible)"""
     from ..core.database import Database
-    import httpx
+    from fastapi.responses import RedirectResponse
     
     db = Database()
     task = await db.get_task(video_id)
@@ -626,7 +626,6 @@ async def get_video_content(
         raise HTTPException(status_code=400, detail="Video not ready for download")
     
     # Redirect to video URL
-    from fastapi.responses import RedirectResponse
     return RedirectResponse(url=task.result_urls, status_code=302)
 
 
