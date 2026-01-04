@@ -163,8 +163,15 @@ _global_cf_refreshing: bool = False
 MIN_CF_REFRESH_INTERVAL = 30  # seconds
 
 
-def is_cf_refreshing(token_id: Optional[int] = None, token: Optional[str] = None) -> bool:
-    """Check if another request is refreshing CF credentials"""
+async def is_cf_refreshing(token_id: Optional[int] = None, token: Optional[str] = None) -> bool:
+    """Check if another request is refreshing CF credentials (supports Redis)"""
+    # Try Redis first
+    if config.redis_enabled:
+        try:
+            from .redis_lock import RedisCFLock
+            return await RedisCFLock.is_refreshing()
+        except:
+            pass
     return _global_cf_refreshing
 
 
@@ -193,6 +200,8 @@ async def solve_cloudflare_challenge(
     
     Prevents concurrent calls: if a request is already solving the challenge,
     other requests will wait for the result instead of making duplicate calls.
+    
+    Supports Redis distributed lock for multi-instance deployment.
     
     Args:
         timeout: Maximum time to wait for CF Solver response (default 30s)

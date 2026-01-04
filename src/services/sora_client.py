@@ -255,7 +255,7 @@ class SoraClient:
                     # Only refresh if we haven't already tried in this request cycle
                     if not cf_refresh_attempted:
                         # Check if another request is already refreshing CF credentials
-                        if is_cf_refreshing(token_id=token_id, token=token):
+                        if await is_cf_refreshing(token_id=token_id, token=token):
                             # Wait silently, solve_cloudflare_challenge will print logs
                             await asyncio.sleep(random.uniform(2, 4))
                             attempt += 1

@@ -14,6 +14,29 @@ max_poll_attempts = 600
 host = "0.0.0.0"
 port = 8000
 
+[database]
+# 数据库类型: sqlite, mysql
+type = "sqlite"
+# SQLite 配置
+sqlite_path = "data/hancat.db"
+# MySQL 配置 (当 type = "mysql" 时使用)
+mysql_host = "localhost"
+mysql_port = 3306
+mysql_user = "root"
+mysql_password = ""
+mysql_database = "sora2api"
+mysql_pool_size = 10
+
+[redis]
+# Redis 配置 (用于分布式锁和缓存)
+enabled = false
+host = "localhost"
+port = 6379
+password = ""
+db = 0
+# 锁超时时间 (秒)
+lock_timeout = 300
+
 [debug]
 enabled = false
 log_requests = true

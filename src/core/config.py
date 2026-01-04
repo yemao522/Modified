@@ -265,6 +265,80 @@ class Config:
             self._config["cloudflare"] = {}
         self._config["cloudflare"]["api_only_enabled"] = enabled
 
+    # ==================== Database Configuration ====================
+    
+    @property
+    def db_type(self) -> str:
+        """Get database type: sqlite or mysql"""
+        return self._config.get("database", {}).get("type", "sqlite")
+
+    @property
+    def sqlite_path(self) -> str:
+        """Get SQLite database path"""
+        return self._config.get("database", {}).get("sqlite_path", "data/hancat.db")
+
+    @property
+    def mysql_host(self) -> str:
+        """Get MySQL host"""
+        return self._config.get("database", {}).get("mysql_host", "localhost")
+
+    @property
+    def mysql_port(self) -> int:
+        """Get MySQL port"""
+        return self._config.get("database", {}).get("mysql_port", 3306)
+
+    @property
+    def mysql_user(self) -> str:
+        """Get MySQL user"""
+        return self._config.get("database", {}).get("mysql_user", "root")
+
+    @property
+    def mysql_password(self) -> str:
+        """Get MySQL password"""
+        return self._config.get("database", {}).get("mysql_password", "")
+
+    @property
+    def mysql_database(self) -> str:
+        """Get MySQL database name"""
+        return self._config.get("database", {}).get("mysql_database", "sora2api")
+
+    @property
+    def mysql_pool_size(self) -> int:
+        """Get MySQL connection pool size"""
+        return self._config.get("database", {}).get("mysql_pool_size", 10)
+
+    # ==================== Redis Configuration ====================
+    
+    @property
+    def redis_enabled(self) -> bool:
+        """Get Redis enabled status"""
+        return self._config.get("redis", {}).get("enabled", False)
+
+    @property
+    def redis_host(self) -> str:
+        """Get Redis host"""
+        return self._config.get("redis", {}).get("host", "localhost")
+
+    @property
+    def redis_port(self) -> int:
+        """Get Redis port"""
+        return self._config.get("redis", {}).get("port", 6379)
+
+    @property
+    def redis_password(self) -> str:
+        """Get Redis password"""
+        return self._config.get("redis", {}).get("password", "")
+
+    @property
+    def redis_db(self) -> int:
+        """Get Redis database number"""
+        return self._config.get("redis", {}).get("db", 0)
+
+    @property
+    def redis_lock_timeout(self) -> int:
+        """Get Redis lock timeout in seconds"""
+        return self._config.get("redis", {}).get("lock_timeout", 300)
+
     # Legacy aliases for backward compatibility
     @property
     def cloudflare_solver_enabled(self) -> bool:
