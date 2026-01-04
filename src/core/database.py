@@ -1113,7 +1113,11 @@ class Database:
             cursor = await db.execute("SELECT * FROM token_stats WHERE token_id = ?", (token_id,))
             row = await cursor.fetchone()
             if row:
-                return TokenStats(**dict(row))
+                data = dict(row)
+                # Convert date object to string for Pydantic compatibility
+                if data.get("today_date") and not isinstance(data["today_date"], str):
+                    data["today_date"] = str(data["today_date"])
+                return TokenStats(**data)
             return None
 
     async def get_stats(self) -> dict:
