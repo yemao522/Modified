@@ -532,7 +532,11 @@ class TokenManager:
 
     async def st_to_at(self, session_token: str) -> dict:
         """Convert Session Token to Access Token"""
+        # 清理 session_token，去除首尾空白字符
+        session_token = session_token.strip()
+        
         debug_logger.log_info(f"[ST_TO_AT] 开始转换 Session Token 为 Access Token...")
+        debug_logger.log_info(f"[ST_TO_AT] ST长度: {len(session_token)}, 前20字符: {session_token[:20]}...")
         proxy_url = await self.proxy_manager.get_proxy_url()
 
         async with AsyncSession() as session:
@@ -572,10 +576,14 @@ class TokenManager:
                     debug_logger.log_info(f"[ST_TO_AT] 原始响应: {response_text[:1000]}")
                     raise ValueError(f"Failed to parse JSON response: {str(json_err)}")
 
-                # 检查data是否为None
+                # 检查data是否为None或空对象
                 if data is None:
-                    debug_logger.log_info(f"[ST_TO_AT] ❌ 响应JSON为空")
-                    raise ValueError("Response JSON is empty")
+                    debug_logger.log_info(f"[ST_TO_AT] ❌ 响应JSON为None")
+                    raise ValueError("ST已过期或无效，请重新获取Session Token")
+                
+                if isinstance(data, dict) and len(data) == 0:
+                    debug_logger.log_info(f"[ST_TO_AT] ❌ 响应JSON为空对象 {{}}")
+                    raise ValueError("ST已过期或无效，请重新获取Session Token")
 
                 access_token = data.get("accessToken")
                 email = data.get("user", {}).get("email") if data.get("user") else None
@@ -607,10 +615,14 @@ class TokenManager:
             refresh_token: Refresh Token
             client_id: Client ID (optional, uses default if not provided)
         """
+        # 清理 refresh_token，去除首尾空白字符
+        refresh_token = refresh_token.strip()
+        
         # Use provided client_id or default
         effective_client_id = client_id or "app_LlGpXReQgckcGGUo2JrYvtJK"
 
         debug_logger.log_info(f"[RT_TO_AT] 开始转换 Refresh Token 为 Access Token...")
+        debug_logger.log_info(f"[RT_TO_AT] RT长度: {len(refresh_token)}, 前20字符: {refresh_token[:20]}...")
         debug_logger.log_info(f"[RT_TO_AT] 使用 Client ID: {effective_client_id[:20]}...")
         proxy_url = await self.proxy_manager.get_proxy_url()
 
@@ -665,10 +677,14 @@ class TokenManager:
                     debug_logger.log_info(f"[RT_TO_AT] 原始响应: {response_text[:1000]}")
                     raise ValueError(f"Failed to parse JSON response: {str(json_err)}")
 
-                # 检查data是否为None
+                # 检查data是否为None或空对象
                 if data is None:
-                    debug_logger.log_info(f"[RT_TO_AT] ❌ 响应JSON为空")
-                    raise ValueError("Response JSON is empty")
+                    debug_logger.log_info(f"[RT_TO_AT] ❌ 响应JSON为None")
+                    raise ValueError("RT已过期或无效，请重新获取Refresh Token")
+                
+                if isinstance(data, dict) and len(data) == 0:
+                    debug_logger.log_info(f"[RT_TO_AT] ❌ 响应JSON为空对象 {{}}")
+                    raise ValueError("RT已过期或无效，请重新获取Refresh Token")
 
                 access_token = data.get("access_token")
                 new_refresh_token = data.get("refresh_token")

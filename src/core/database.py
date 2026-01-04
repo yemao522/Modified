@@ -973,39 +973,87 @@ class Database:
             await db.commit()
     
     async def update_token_status(self, token_id: int, is_active: bool):
-        """Update token status"""
-        async with self._connect() as db:
-            await db.execute("""
-                UPDATE tokens SET is_active = ? WHERE id = ?
-            """, (is_active, token_id))
-            await db.commit()
+        """Update token status with retry for concurrent updates"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self._connect() as db:
+                    await db.execute("""
+                        UPDATE tokens SET is_active = ? WHERE id = ?
+                    """, (is_active, token_id))
+                    await db.commit()
+                    return
+            except Exception as e:
+                error_msg = str(e)
+                # MySQL error 1020: Record has changed since last read
+                if "1020" in error_msg or "Record has changed" in error_msg:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.1 * (attempt + 1))
+                        continue
+                raise
     
     async def update_token_sora2(self, token_id: int, supported: bool, invite_code: Optional[str] = None,
                                 redeemed_count: int = 0, total_count: int = 0, remaining_count: int = 0):
-        """Update token Sora2 support info"""
-        async with self._connect() as db:
-            await db.execute("""
-                UPDATE tokens
-                SET sora2_supported = ?, sora2_invite_code = ?, sora2_redeemed_count = ?, sora2_total_count = ?, sora2_remaining_count = ?
-                WHERE id = ?
-            """, (supported, invite_code, redeemed_count, total_count, remaining_count, token_id))
-            await db.commit()
+        """Update token Sora2 support info with retry for concurrent updates"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self._connect() as db:
+                    await db.execute("""
+                        UPDATE tokens
+                        SET sora2_supported = ?, sora2_invite_code = ?, sora2_redeemed_count = ?, sora2_total_count = ?, sora2_remaining_count = ?
+                        WHERE id = ?
+                    """, (supported, invite_code, redeemed_count, total_count, remaining_count, token_id))
+                    await db.commit()
+                    return
+            except Exception as e:
+                error_msg = str(e)
+                # MySQL error 1020: Record has changed since last read
+                if "1020" in error_msg or "Record has changed" in error_msg:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.1 * (attempt + 1))
+                        continue
+                raise
 
     async def update_token_sora2_remaining(self, token_id: int, remaining_count: int):
-        """Update token Sora2 remaining count"""
-        async with self._connect() as db:
-            await db.execute("""
-                UPDATE tokens SET sora2_remaining_count = ? WHERE id = ?
-            """, (remaining_count, token_id))
-            await db.commit()
+        """Update token Sora2 remaining count with retry for concurrent updates"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self._connect() as db:
+                    await db.execute("""
+                        UPDATE tokens SET sora2_remaining_count = ? WHERE id = ?
+                    """, (remaining_count, token_id))
+                    await db.commit()
+                    return
+            except Exception as e:
+                error_msg = str(e)
+                # MySQL error 1020: Record has changed since last read
+                if "1020" in error_msg or "Record has changed" in error_msg:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.1 * (attempt + 1))
+                        continue
+                raise
 
     async def update_token_sora2_cooldown(self, token_id: int, cooldown_until: Optional[datetime]):
-        """Update token Sora2 cooldown time"""
-        async with self._connect() as db:
-            await db.execute("""
-                UPDATE tokens SET sora2_cooldown_until = ? WHERE id = ?
-            """, (cooldown_until, token_id))
-            await db.commit()
+        """Update token Sora2 cooldown time with retry for concurrent updates"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self._connect() as db:
+                    await db.execute("""
+                        UPDATE tokens SET sora2_cooldown_until = ? WHERE id = ?
+                    """, (cooldown_until, token_id))
+                    await db.commit()
+                    return
+            except Exception as e:
+                error_msg = str(e)
+                # MySQL error 1020: Record has changed since last read
+                if "1020" in error_msg or "Record has changed" in error_msg:
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.1 * (attempt + 1))
+                        continue
+                raise
 
     async def update_token_cooldown(self, token_id: int, cooled_until: datetime):
         """Update token cooldown"""
@@ -1186,22 +1234,33 @@ class Database:
             }
     
     async def increment_image_count(self, token_id: int):
-        """Increment image generation count"""
+        """Increment image generation count - uses row-level lock for MySQL"""
         from datetime import date
-        async with self._connect() as db:
-            today = str(date.today())
-            # Atomic update: reset today_count if date changed, otherwise increment
-            if self.db_type == "mysql":
-                # MySQL uses IF() function
-                await db.execute("""
-                    UPDATE token_stats
-                    SET image_count = image_count + 1,
-                        today_image_count = IF(today_date = ?, today_image_count + 1, 1),
-                        today_date = ?
-                    WHERE token_id = ?
-                """, (today, today, token_id))
-            else:
-                # SQLite uses CASE WHEN
+        today = str(date.today())
+        
+        if self.db_type == "mysql":
+            # MySQL: use SELECT FOR UPDATE to lock the row, then update
+            import aiomysql
+            pool = await self._get_mysql_pool()
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cursor:
+                    # Lock the row first
+                    await cursor.execute(
+                        "SELECT id FROM token_stats WHERE token_id = %s FOR UPDATE",
+                        (token_id,)
+                    )
+                    # Now update atomically
+                    await cursor.execute("""
+                        UPDATE token_stats
+                        SET image_count = image_count + 1,
+                            today_image_count = IF(today_date = %s, today_image_count + 1, 1),
+                            today_date = %s
+                        WHERE token_id = %s
+                    """, (today, today, token_id))
+                    await conn.commit()
+        else:
+            # SQLite: simple atomic update
+            async with self._connect() as db:
                 await db.execute("""
                     UPDATE token_stats
                     SET image_count = image_count + 1,
@@ -1209,25 +1268,36 @@ class Database:
                         today_date = ?
                     WHERE token_id = ?
                 """, (today, today, token_id))
-            await db.commit()
+                await db.commit()
 
     async def increment_video_count(self, token_id: int):
-        """Increment video generation count"""
+        """Increment video generation count - uses row-level lock for MySQL"""
         from datetime import date
-        async with self._connect() as db:
-            today = str(date.today())
-            # Atomic update: reset today_count if date changed, otherwise increment
-            if self.db_type == "mysql":
-                # MySQL uses IF() function
-                await db.execute("""
-                    UPDATE token_stats
-                    SET video_count = video_count + 1,
-                        today_video_count = IF(today_date = ?, today_video_count + 1, 1),
-                        today_date = ?
-                    WHERE token_id = ?
-                """, (today, today, token_id))
-            else:
-                # SQLite uses CASE WHEN
+        today = str(date.today())
+        
+        if self.db_type == "mysql":
+            # MySQL: use SELECT FOR UPDATE to lock the row, then update
+            import aiomysql
+            pool = await self._get_mysql_pool()
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cursor:
+                    # Lock the row first
+                    await cursor.execute(
+                        "SELECT id FROM token_stats WHERE token_id = %s FOR UPDATE",
+                        (token_id,)
+                    )
+                    # Now update atomically
+                    await cursor.execute("""
+                        UPDATE token_stats
+                        SET video_count = video_count + 1,
+                            today_video_count = IF(today_date = %s, today_video_count + 1, 1),
+                            today_date = %s
+                        WHERE token_id = %s
+                    """, (today, today, token_id))
+                    await conn.commit()
+        else:
+            # SQLite: simple atomic update
+            async with self._connect() as db:
                 await db.execute("""
                     UPDATE token_stats
                     SET video_count = video_count + 1,
@@ -1235,27 +1305,38 @@ class Database:
                         today_date = ?
                     WHERE token_id = ?
                 """, (today, today, token_id))
-            await db.commit()
+                await db.commit()
     
     async def increment_error_count(self, token_id: int):
-        """Increment error count (both total and consecutive)"""
+        """Increment error count - uses row-level lock for MySQL"""
         from datetime import date
-        async with self._connect() as db:
-            today = str(date.today())
-            # Atomic update: reset today_error_count if date changed, otherwise increment
-            if self.db_type == "mysql":
-                # MySQL uses IF() function
-                await db.execute("""
-                    UPDATE token_stats
-                    SET error_count = error_count + 1,
-                        consecutive_error_count = consecutive_error_count + 1,
-                        today_error_count = IF(today_date = ?, today_error_count + 1, 1),
-                        today_date = ?,
-                        last_error_at = CURRENT_TIMESTAMP
-                    WHERE token_id = ?
-                """, (today, today, token_id))
-            else:
-                # SQLite uses CASE WHEN
+        today = str(date.today())
+        
+        if self.db_type == "mysql":
+            # MySQL: use SELECT FOR UPDATE to lock the row, then update
+            import aiomysql
+            pool = await self._get_mysql_pool()
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cursor:
+                    # Lock the row first
+                    await cursor.execute(
+                        "SELECT id FROM token_stats WHERE token_id = %s FOR UPDATE",
+                        (token_id,)
+                    )
+                    # Now update atomically
+                    await cursor.execute("""
+                        UPDATE token_stats
+                        SET error_count = error_count + 1,
+                            consecutive_error_count = consecutive_error_count + 1,
+                            today_error_count = IF(today_date = %s, today_error_count + 1, 1),
+                            today_date = %s,
+                            last_error_at = CURRENT_TIMESTAMP
+                        WHERE token_id = %s
+                    """, (today, today, token_id))
+                    await conn.commit()
+        else:
+            # SQLite: simple atomic update
+            async with self._connect() as db:
                 await db.execute("""
                     UPDATE token_stats
                     SET error_count = error_count + 1,
@@ -1265,15 +1346,34 @@ class Database:
                         last_error_at = CURRENT_TIMESTAMP
                     WHERE token_id = ?
                 """, (today, today, token_id))
-            await db.commit()
+                await db.commit()
     
     async def reset_error_count(self, token_id: int):
-        """Reset consecutive error count (keep total error_count)"""
-        async with self._connect() as db:
-            await db.execute("""
-                UPDATE token_stats SET consecutive_error_count = 0 WHERE token_id = ?
-            """, (token_id,))
-            await db.commit()
+        """Reset consecutive error count - uses row-level lock for MySQL"""
+        if self.db_type == "mysql":
+            # MySQL: use SELECT FOR UPDATE to lock the row, then update
+            import aiomysql
+            pool = await self._get_mysql_pool()
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cursor:
+                    # Lock the row first
+                    await cursor.execute(
+                        "SELECT id FROM token_stats WHERE token_id = %s FOR UPDATE",
+                        (token_id,)
+                    )
+                    # Now update atomically
+                    await cursor.execute(
+                        "UPDATE token_stats SET consecutive_error_count = 0 WHERE token_id = %s",
+                        (token_id,)
+                    )
+                    await conn.commit()
+        else:
+            # SQLite: simple update
+            async with self._connect() as db:
+                await db.execute("""
+                    UPDATE token_stats SET consecutive_error_count = 0 WHERE token_id = ?
+                """, (token_id,))
+                await db.commit()
     
     # Task operations
     async def create_task(self, task: Task) -> int:

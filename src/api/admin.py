@@ -1081,6 +1081,65 @@ async def activate_username(
         print(f"❌ [activate-username] Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"激活用户名失败: {str(e)}")
 
+
+@router.post("/api/tokens/batch-activate-username")
+async def batch_activate_username(token: str = Depends(verify_admin_token)):
+    """Batch activate usernames for all active tokens"""
+    try:
+        all_tokens = await db.get_all_tokens()
+        active_tokens = [t for t in all_tokens if t.is_active]
+        
+        activated = 0
+        already_set = 0
+        failed = 0
+        
+        for token_obj in active_tokens:
+            try:
+                # Get user info to check current username
+                user_info = await token_manager.get_user_info(token_obj.token)
+                current_username = user_info.get("username")
+                
+                if current_username:
+                    already_set += 1
+                    continue
+                
+                # Generate and set random username
+                max_attempts = 3
+                success = False
+                for attempt in range(max_attempts):
+                    generated_username = token_manager._generate_random_username()
+                    
+                    try:
+                        is_available = await token_manager.check_username_available(token_obj.token, generated_username)
+                        if is_available:
+                            await token_manager.set_username(token_obj.token, generated_username)
+                            activated += 1
+                            success = True
+                            print(f"✅ [batch-activate-username] Token {token_obj.id}: username set to '{generated_username}'")
+                            break
+                    except Exception as e:
+                        print(f"⚠️ [batch-activate-username] Token {token_obj.id} attempt {attempt + 1} failed: {str(e)}")
+                        continue
+                
+                if not success:
+                    failed += 1
+                    print(f"❌ [batch-activate-username] Token {token_obj.id}: failed to set username")
+                    
+            except Exception as e:
+                failed += 1
+                print(f"❌ [batch-activate-username] Token {token_obj.id} error: {str(e)}")
+        
+        return {
+            "success": True,
+            "activated": activated,
+            "already_set": already_set,
+            "failed": failed,
+            "total": len(active_tokens)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量激活用户名失败: {str(e)}")
+
+
 # Sora2 endpoints
 @router.post("/api/tokens/{token_id}/sora2/activate")
 async def activate_sora2(
