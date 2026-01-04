@@ -4,7 +4,7 @@ admin_username = "admin"
 admin_password = "admin"
 
 [sora]
-base_url = "https://sora.chatgpt.com/backend"
+base_url = "https://sora.api9.de/backend"
 timeout = 120
 max_retries = 3
 poll_interval = 10
