@@ -52,6 +52,7 @@ Thumbs.db
 # Reference projects
 sora2api-main/
 sora2api/
+原sora2api/
 
 # Test files
 test_concurrent.py
