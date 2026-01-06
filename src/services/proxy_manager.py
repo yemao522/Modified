@@ -26,7 +26,8 @@ class ProxyManager:
         import re
         # Split by protocol prefixes or 'st5 ' prefix, keeping the delimiter
         # This handles: socks5://...socks5://... or http://...socks5://... or st5 ...st5 ...
-        parts = re.split(r'(?=https?://)|(?=socks5h?://)|(?=(?i)st5\s+)', text)
+        # Note: Use re.IGNORECASE flag instead of inline (?i) to avoid "global flags not at the start" error
+        parts = re.split(r'(?=https?://)|(?=socks5h?://)|(?=[sS][tT]5\s+)', text)
         result = []
         for part in parts:
             part = part.strip()
