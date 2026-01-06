@@ -1527,26 +1527,43 @@ class Database:
             return ProxyConfig(proxy_enabled=False)
     
     async def update_proxy_config(self, enabled: bool, proxy_url: Optional[str], proxy_pool_enabled: bool = False):
-        """Update proxy configuration"""
-        async with self._connect() as db:
-            # First check if row exists
-            cursor = await db.execute("SELECT COUNT(*) FROM proxy_config WHERE id = 1")
-            count = await cursor.fetchone()
-            row_exists = self._get_count_value(count) > 0
-            
-            if row_exists:
-                await db.execute("""
-                    UPDATE proxy_config
-                    SET proxy_enabled = ?, proxy_url = ?, proxy_pool_enabled = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = 1
-                """, (enabled, proxy_url, proxy_pool_enabled))
-            else:
-                # Insert if not exists
-                await db.execute("""
-                    INSERT INTO proxy_config (id, proxy_enabled, proxy_url, proxy_pool_enabled)
-                    VALUES (1, ?, ?, ?)
-                """, (enabled, proxy_url, proxy_pool_enabled))
-            await db.commit()
+        """Update proxy configuration with retry for optimistic lock conflicts
+        
+        Uses INSERT ... ON CONFLICT for SQLite or INSERT ... ON DUPLICATE KEY UPDATE for MySQL/TiDB
+        """
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self._connect() as db:
+                    # First check if row exists
+                    cursor = await db.execute("SELECT COUNT(*) FROM proxy_config WHERE id = 1")
+                    count = await cursor.fetchone()
+                    row_exists = self._get_count_value(count) > 0
+                    
+                    if row_exists:
+                        # Update existing row
+                        await db.execute("""
+                            UPDATE proxy_config 
+                            SET proxy_enabled = ?, proxy_url = ?, proxy_pool_enabled = ?, updated_at = CURRENT_TIMESTAMP
+                            WHERE id = 1
+                        """, (enabled, proxy_url, proxy_pool_enabled))
+                    else:
+                        # Insert new row
+                        await db.execute("""
+                            INSERT INTO proxy_config (id, proxy_enabled, proxy_url, proxy_pool_enabled, updated_at)
+                            VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """, (enabled, proxy_url, proxy_pool_enabled))
+                    await db.commit()
+                    return
+            except Exception as e:
+                error_msg = str(e)
+                # Handle TiDB/MySQL optimistic lock conflict (error 1020)
+                if "1020" in error_msg or "Record has changed" in error_msg or "Deadlock" in error_msg:
+                    if attempt < max_retries - 1:
+                        import asyncio
+                        await asyncio.sleep(0.1 * (attempt + 1))
+                        continue
+                raise
 
     # Watermark-free config operations
     async def get_watermark_free_config(self) -> WatermarkFreeConfig:
