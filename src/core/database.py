@@ -1428,6 +1428,16 @@ class Database:
             if row:
                 return Task(**dict(row))
             return None
+
+    async def get_recent_tasks(self, limit: int = 10) -> List[Task]:
+        """Get recent tasks ordered by creation time"""
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,)
+            )
+            rows = await cursor.fetchall()
+            return [Task(**dict(row)) for row in rows]
     
     # Request log operations
     async def log_request(self, log: RequestLog) -> int:
