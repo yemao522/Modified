@@ -664,6 +664,25 @@ class GenerationHandler:
                         debug_logger.log_info(f"Failed to update log during GeneratorExit: {log_error}")
                 else:
                     debug_logger.log_info(f"Client disconnected, task {task_id} status: {task_data.status if task_data else 'unknown'}")
+                    # Mark task as cancelled and update request log for client disconnect
+                    try:
+                        await self.db.update_task(task_id, "cancelled", 0, error_message="Client disconnected")
+                        await self.db.update_request_log_by_task_id(
+                            task_id,
+                            response_body=json.dumps({"error": "Client disconnected"}),
+                            status_code=499,
+                            duration=time.time() - start_time
+                        )
+                    except Exception as log_error:
+                        debug_logger.log_info(f"Failed to update cancellation state: {log_error}")
+
+                    # Release resources so tokens don't get stuck
+                    if is_image:
+                        await self.load_balancer.token_lock.release_lock(token_obj.id)
+                        if self.concurrency_manager:
+                            await self.concurrency_manager.release_image(token_obj.id)
+                    if is_video and self.concurrency_manager:
+                        await self.concurrency_manager.release_video(token_obj.id)
                 raise
             finally:
                 # Always update log and stats when generation completes successfully

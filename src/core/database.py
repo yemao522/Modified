@@ -1543,7 +1543,7 @@ class Database:
         for attempt in range(max_retries):
             try:
                 async with self._connect() as db:
-                    completed_at = datetime.now() if status in ["completed", "failed"] else None
+                    completed_at = datetime.now() if status in ["completed", "failed", "cancelled"] else None
                     await db.execute("""
                         UPDATE tasks 
                         SET status = ?, progress = ?, result_urls = ?, error_message = ?, completed_at = ?

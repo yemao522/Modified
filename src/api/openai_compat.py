@@ -893,6 +893,8 @@ async def get_video(
         status = "completed"
     elif status == "failed":
         status = "failed"
+    elif status == "cancelled":
+        status = "cancelled"
     
     # Extract model info from task
     model = "sora-2"
