@@ -136,17 +136,17 @@ class ProxyManager:
         return len(self._proxy_pool)
 
     async def test_single_proxy(self, proxy_url: str, timeout: int = 10) -> dict:
-        """Test a single proxy
+        """Test a single proxy by connecting to sora.chatgpt.com
         
         Args:
             proxy_url: Proxy URL to test
             timeout: Request timeout in seconds
             
         Returns:
-            dict with success, latency, error fields
+            dict with valid, latency, error fields
         """
         start_time = datetime.now()
-        test_url = "https://httpbin.org/ip"
+        test_url = "https://sora.chatgpt.com/"
         
         try:
             connector = aiohttp.TCPConnector(ssl=False)
@@ -154,36 +154,38 @@ class ProxyManager:
                 async with session.get(
                     test_url,
                     proxy=proxy_url,
-                    timeout=aiohttp.ClientTimeout(total=timeout)
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                    allow_redirects=True
                 ) as response:
-                    if response.status == 200:
-                        latency = (datetime.now() - start_time).total_seconds() * 1000
+                    latency = (datetime.now() - start_time).total_seconds() * 1000
+                    # 200 或 403 都表示代理可以连接到目标
+                    if response.status in [200, 403]:
                         return {
-                            "success": True,
+                            "valid": True,
                             "latency": round(latency, 2),
                             "error": None
                         }
                     else:
                         return {
-                            "success": False,
+                            "valid": False,
                             "latency": None,
                             "error": f"HTTP {response.status}"
                         }
         except asyncio.TimeoutError:
             return {
-                "success": False,
+                "valid": False,
                 "latency": None,
                 "error": "连接超时"
             }
         except aiohttp.ClientProxyConnectionError as e:
             return {
-                "success": False,
+                "valid": False,
                 "latency": None,
                 "error": f"代理连接失败: {str(e)}"
             }
         except Exception as e:
             return {
-                "success": False,
+                "valid": False,
                 "latency": None,
                 "error": str(e)
             }
@@ -216,12 +218,12 @@ class ProxyManager:
             result["proxy_full"] = proxy  # 保留完整代理用于后续处理
             results.append(result)
             
-            if result["success"]:
+            if result["valid"]:
                 valid_proxies.append(proxy)
             
             # 更新状态缓存
             self._proxy_status[proxy] = {
-                "success": result["success"],
+                "valid": result["valid"],
                 "latency": result["latency"],
                 "error": result["error"],
                 "tested_at": datetime.now().isoformat()
