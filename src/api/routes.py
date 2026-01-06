@@ -1,5 +1,5 @@
 """API routes - OpenAI compatible endpoints"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from datetime import datetime
 from typing import List
@@ -70,6 +70,7 @@ async def list_models(api_key: str = Depends(verify_api_key_header)):
 @router.post("/v1/chat/completions")
 async def create_chat_completion(
     request: ChatCompletionRequest,
+    http_request: Request,
     api_key: str = Depends(verify_api_key_header)
 ):
     """Create chat completion (unified endpoint for image and video generation)"""
@@ -175,8 +176,10 @@ async def create_chat_completion(
         if request.stream:
             async def generate():
                 import json as json_module  # Import inside function to avoid scope issues
+                next_task = None
+                disconnect_task = None
                 try:
-                    async for chunk in generation_handler.handle_generation(
+                    gen = generation_handler.handle_generation(
                         model=request.model,
                         prompt=prompt,
                         image=image_data,
@@ -185,8 +188,27 @@ async def create_chat_completion(
                         stream=True,
                         character_options=character_options,
                         style_id=style_id
-                    ):
-                        yield chunk
+                    )
+                    next_task = asyncio.create_task(gen.__anext__())
+                    disconnect_task = asyncio.create_task(http_request.is_disconnected())
+                    while True:
+                        done, _ = await asyncio.wait(
+                            {next_task, disconnect_task},
+                            timeout=2,
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+                        if disconnect_task in done:
+                            if disconnect_task.result():
+                                next_task.cancel()
+                                raise asyncio.CancelledError
+                            disconnect_task = asyncio.create_task(http_request.is_disconnected())
+                        if next_task in done:
+                            try:
+                                chunk = next_task.result()
+                            except StopAsyncIteration:
+                                break
+                            yield chunk
+                            next_task = asyncio.create_task(gen.__anext__())
                 except (asyncio.CancelledError, GeneratorExit):
                     # Client disconnected; allow cancellation to propagate
                     raise
@@ -203,6 +225,11 @@ async def create_chat_completion(
                     error_chunk = f'data: {json_module.dumps(error_response)}\n\n'
                     yield error_chunk
                     yield 'data: [DONE]\n\n'
+                finally:
+                    if next_task and not next_task.done():
+                        next_task.cancel()
+                    if disconnect_task and not disconnect_task.done():
+                        disconnect_task.cancel()
 
             return StreamingResponse(
                 generate(),
