@@ -19,8 +19,8 @@ CHROME_HEADERS = {
     "Sec-Fetch-Site": "same-origin",
 }
 
-# iPhone 15 Pro Max + Chrome 131 Mobile UA
-DEFAULT_USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/131.0.6778.73 Mobile/15E148 Safari/604.1"
+# iPhone 15 Pro Max + Safari 18.5 Mobile UA
+DEFAULT_USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
 
 
 def build_sora_headers(
