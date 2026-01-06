@@ -68,5 +68,6 @@ def build_simple_headers(token: str) -> dict:
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
         "Origin": "https://sora.chatgpt.com",
-        "Referer": "https://sora.chatgpt.com/"
+        "Referer": "https://sora.chatgpt.com/",
+        "User-Agent": DEFAULT_USER_AGENT,
     }

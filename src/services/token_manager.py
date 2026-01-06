@@ -56,11 +56,16 @@ class TokenManager:
         Returns:
             Response 对象
         """
+        from ..core.http_utils import DEFAULT_USER_AGENT
+        
         cf_state = get_cloudflare_state()
         
-        # 使用全局 Cloudflare 状态的 user_agent
-        if cf_state.user_agent and "User-Agent" not in headers:
-            headers["User-Agent"] = cf_state.user_agent
+        # 设置 User-Agent 优先级: CF Solver UA > 已有 UA > 默认移动端 UA
+        if "User-Agent" not in headers:
+            if cf_state.user_agent:
+                headers["User-Agent"] = cf_state.user_agent
+            else:
+                headers["User-Agent"] = DEFAULT_USER_AGENT
         
         # 应用全局 Cloudflare cookies 到 session
         if cf_state.is_valid:
@@ -69,7 +74,7 @@ class TokenManager:
         request_kwargs = {
             "headers": headers,
             "timeout": 30,
-            "impersonate": "chrome",
+            "impersonate": "safari_ios",  # 使用 iOS Safari 指纹
             **kwargs,
         }
         

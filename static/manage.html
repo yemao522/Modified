@@ -465,69 +465,6 @@
                     </div>
                 </div>
 
-                <!-- Cloudflare Solver 配置 -->
-                <div class="rounded-lg border border-border bg-background p-6">
-                    <h3 class="text-lg font-semibold mb-4">Cloudflare Solver 配置</h3>
-                    <div class="space-y-4">
-                        <div>
-                            <label class="inline-flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" id="cfgCloudflareSolverEnabled" class="h-4 w-4 rounded border-input" onchange="toggleCloudflareSolverOptions()">
-                                <span class="text-sm font-medium">启用 Cloudflare Solver</span>
-                            </label>
-                            <p class="text-xs text-muted-foreground mt-2">启用后，当检测到 429 Cloudflare challenge 时，会自动调用 Solver API 获取 cf_clearance cookie</p>
-                        </div>
-
-                        <div id="cloudflareSolverOptions" style="display: none;" class="space-y-4 pt-4 border-t border-border">
-                            <div>
-                                <label class="text-sm font-medium mb-2 block">Solver API 地址</label>
-                                <input id="cfgCloudflareSolverUrl" type="text" class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="http://64.23.171.147:8005/">
-                                <p class="text-xs text-muted-foreground mt-1">Cloudflare Solver 服务的 API 地址</p>
-                            </div>
-                            
-                        </div>
-
-                        <button onclick="saveCloudflareSolverConfig()" class="inline-flex items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4 w-full">保存配置</button>
-                    </div>
-                </div>
-
-                <!-- Cloudflare 凭据状态 -->
-                <div class="rounded-lg border border-border bg-background p-6">
-                    <!-- Cloudflare 凭据状态已移除 -->
-                    <div class="space-y-4">
-                        <!-- 状态显示 -->
-                        <div id="cfStateDisplay" class="rounded-md p-4 border">
-                            <div class="flex items-center justify-between mb-3">
-                                <div class="flex items-center gap-2">
-                                    <span id="cfStatusIndicator" class="w-3 h-3 rounded-full bg-gray-400"></span>
-                                    <span id="cfStatusText" class="text-sm font-medium">加载中...</span>
-                                </div>
-                                <span id="cfRemainingTime" class="text-xs text-muted-foreground"></span>
-                            </div>
-                            <div id="cfStateDetails" class="text-xs text-muted-foreground space-y-1">
-                                <p>User-Agent: <span id="cfUserAgent">-</span></p>
-                                <p>Cookies: <span id="cfCookiesCount">0</span> 个</p>
-                                <p>更新时间: <span id="cfLastUpdated">-</span></p>
-                            </div>
-                        </div>
-
-                        <!-- 操作按钮 -->
-                        <div class="flex gap-2">
-                            <button id="cfRefreshBtn" onclick="refreshCfCredentials()" class="flex-1 inline-flex items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-4 text-sm">
-                                <svg id="cfRefreshIcon" class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                                <svg id="cfRefreshSpinner" class="hidden animate-spin w-4 h-4 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                                <span id="cfRefreshText">获取凭据</span>
-                            </button>
-                            <button onclick="clearCfCredentials()" class="flex-1 inline-flex items-center justify-center rounded-md border border-input bg-background hover:bg-accent h-9 px-4 text-sm">
-                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                                清除凭据
-                            </button>
-                            <button onclick="loadCfState()" class="inline-flex items-center justify-center rounded-md border border-input bg-background hover:bg-accent h-9 px-3 text-sm">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- 调试配置 -->
                 <div class="rounded-lg border border-border bg-background p-6">
                     <h3 class="text-lg font-semibold mb-4">调试配置</h3>
