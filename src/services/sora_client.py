@@ -1,6 +1,7 @@
 """Sora API client module"""
 import base64
 import io
+import json
 import time
 import random
 import string
@@ -35,25 +36,22 @@ class SoraClient:
         self.proxy_manager = proxy_manager
         self.timeout = config.sora_timeout  # 从配置读取超时时间
         self.base_url = config.sora_base_url  # 从配置读取基础URL
-        # 持久化 session 字典，按 token 分组维护 cookie
-        self._sessions: Dict[str, AsyncSession] = {}
-
-    @staticmethod
-    def _generate_sentinel_token_fallback() -> str:
-        """生成随机 openai-sentinel-token（sentinel/req 失败时回退）"""
-        length = random.randint(10, 20)
-        return "".join(random.choices(string.ascii_letters + string.digits, k=length))
+        # 持久化 session 字典，按 token 分组维护 (session, fingerprint)
+        self._sessions: Dict[str, Tuple[AsyncSession, str]] = {}
 
     async def _generate_sentinel_token(
         self,
+        session: AsyncSession,
         user_agent: str,
         proxy_url: Optional[str],
+        fingerprint: str,
+        auth_token: Optional[str] = None,
         flow: str = "sora_2_create_task"
     ) -> str:
         """
-        尝试通过 /sentinel/req 生成 openai-sentinel-token，失败时回退为随机字符串
+        尝试通过 /sentinel/req 生成 openai-sentinel-token，失败时抛出异常
         """
-        pow_token = get_pow_token_mock()
+        pow_token = get_pow_token_mock(user_agent=user_agent)
         payload = {"p": pow_token, "flow": flow, "id": generate_id()}
         headers = {
             "Accept": "application/json, text/plain, */*",
@@ -61,23 +59,29 @@ class SoraClient:
             "Referer": "https://chatgpt.com/",
             "User-Agent": user_agent,
         }
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
 
         try:
-            async with AsyncSession() as session:
-                response = await session.post(
-                    "https://chatgpt.com/backend-api/sentinel/req",
-                    json=payload,
-                    headers=headers,
-                    timeout=10,
-                    proxy=proxy_url,
-                    impersonate=get_random_fingerprint()
-                )
+            response = await session.post(
+                "https://chatgpt.com/backend-api/sentinel/req",
+                json=payload,
+                headers=headers,
+                timeout=10,
+                proxy=proxy_url,
+                impersonate=fingerprint,
+            )
             if response.status_code != 200:
-                raise Exception(f"sentinel/req failed: {response.status_code}")
+                raise Exception(f"sentinel/req failed: {response.status_code} - {response.text}")
             resp_json = response.json()
-            return build_openai_sentinel_token(flow, resp_json, pow_token)
-        except Exception:
-            return self._generate_sentinel_token_fallback()
+            return build_openai_sentinel_token(flow, resp_json, pow_token, user_agent=user_agent)
+        except Exception as exc:
+            debug_logger.log_error(
+                error_message=f"sentinel/req failed: {exc}",
+                status_code=getattr(getattr(exc, "response", None), "status_code", None),
+                response_text=str(exc),
+            )
+            raise Exception(f"sentinel/req 请求失败: {exc}")
 
     @staticmethod
     def is_storyboard_prompt(prompt: str) -> bool:
@@ -141,23 +145,28 @@ class SoraClient:
         else:
             return timeline
 
-    async def _get_session(self, token: str) -> AsyncSession:
-        """获取或创建持久化 session，并应用全局 Cloudflare cookies"""
+    async def _get_session(self, token: str) -> Tuple[AsyncSession, str]:
+        """获取或创建持久化 session，并应用全局 Cloudflare cookies
+        
+        Returns:
+            Tuple of (session, fingerprint)
+        """
         from ..core.http_utils import get_random_fingerprint
         
         cf_state = get_cloudflare_state(token=token)
         
         if token not in self._sessions:
-            # 使用随机手机指纹
-            self._sessions[token] = AsyncSession(impersonate=get_random_fingerprint())
+            # 使用随机手机指纹，并保存
+            fingerprint = get_random_fingerprint()
+            self._sessions[token] = (AsyncSession(impersonate=fingerprint), fingerprint)
         
-        session = self._sessions[token]
+        session, fingerprint = self._sessions[token]
         
         # 应用全局 Cloudflare cookies 到 session
         if cf_state.is_valid:
             cf_state.apply_to_session(session)
         
-        return session
+        return session, fingerprint
 
     async def _make_request(self, method: str, endpoint: str, token: str,
                            json_data: Optional[Dict] = None,
@@ -184,9 +193,17 @@ class SoraClient:
 
         # 使用全局 Cloudflare 状态的 user_agent，如果有的话
         user_agent = cf_state.user_agent or DEFAULT_USER_AGENT
+        # 使用同一 session + 指纹请求 sentinel，避免指纹不一致导致 401
+        session, fingerprint = await self._get_session(token)
+        if cf_state.is_valid:
+            cf_state.apply_to_session(session)
+
         sentinel = await self._generate_sentinel_token(
+            session=session,
             user_agent=user_agent,
-            proxy_url=proxy_url
+            proxy_url=proxy_url,
+            fingerprint=fingerprint,
+            auth_token=token,
         ) if add_sentinel_token else None
         content_type = None if multipart else "application/json"
         
@@ -196,11 +213,10 @@ class SoraClient:
             content_type=content_type,
             sentinel_token=sentinel
         )
+        if endpoint in ("/nf/create", "/nf/create/storyboard"):
+            headers["Accept"] = "application/json"
 
         url = f"{config.sora_base_url}{endpoint}"
-        
-        # 使用持久化 session 维护 cookie（会自动应用全局 Cloudflare cookies）
-        session = await self._get_session(token)
         
         attempt = 0
         cf_refresh_attempted = False
@@ -229,6 +245,23 @@ class SoraClient:
 
             if multipart:
                 kwargs["multipart"] = multipart
+
+            if endpoint == "/nf/create":
+                masked_headers = dict(headers)
+                auth_value = masked_headers.get("Authorization", "")
+                if auth_value.startswith("Bearer "):
+                    token_value = auth_value[7:]
+                    if config.debug_mask_token and len(token_value) > 12:
+                        masked_headers["Authorization"] = f"Bearer {token_value[:6]}...{token_value[-6:]}"
+                print("🔵 [NF_CREATE] Request Headers:")
+                for key, value in masked_headers.items():
+                    print(f"  {key}: {value}")
+                if json_data is not None:
+                    print("🔵 [NF_CREATE] Request Body:")
+                    if isinstance(json_data, (dict, list)):
+                        print(json.dumps(json_data, ensure_ascii=False, indent=2))
+                    else:
+                        print(str(json_data))
 
             # Log request
             debug_logger.log_request(
@@ -572,11 +605,21 @@ class SoraClient:
         json_data = {
             "kind": "video",
             "prompt": prompt,
+            "title": None,
             "orientation": orientation,
             "size": size,
             "n_frames": n_frames,
+            "inpaint_items": inpaint_items,
+            "remix_target_id": None,
+            "metadata": None,
+            "cameo_ids": None,
+            "cameo_replacements": None,
             "model": model,
-            "inpaint_items": inpaint_items
+            "style_id": None,
+            "audio_caption": None,
+            "audio_transcript": None,
+            "video_caption": None,
+            "storyboard_id": None
         }
         
         # Add style_id if provided
@@ -694,7 +737,7 @@ class SoraClient:
             "Sec-Fetch-Site": "same-origin",
         }
 
-        session = await self._get_session(token)
+        session, _ = await self._get_session(token)
         url = f"{self.base_url}/project_y/post/{post_id}"
 
         kwargs = {
@@ -1062,7 +1105,7 @@ class SoraClient:
             "Sec-Fetch-Site": "same-origin",
         }
 
-        session = await self._get_session(token)
+        session, _ = await self._get_session(token)
         url = f"{self.base_url}/project_y/characters/{character_id}"
 
         kwargs = {
@@ -1095,13 +1138,21 @@ class SoraClient:
         json_data = {
             "kind": "video",
             "prompt": prompt,
+            "title": None,
+            "orientation": orientation,
+            "size": "small",
+            "n_frames": n_frames,
             "inpaint_items": [],
             "remix_target_id": remix_target_id,
-            "cameo_ids": [],
-            "cameo_replacements": {},
+            "metadata": None,
+            "cameo_ids": None,
+            "cameo_replacements": None,
             "model": "sy_8",
-            "orientation": orientation,
-            "n_frames": n_frames
+            "style_id": None,
+            "audio_caption": None,
+            "audio_transcript": None,
+            "video_caption": None,
+            "storyboard_id": None
         }
 
         result = await self._make_request("POST", "/nf/create", token, json_data=json_data, add_sentinel_token=True)
